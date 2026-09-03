@@ -1,18 +1,20 @@
 """
 Autor: Ismael Elói da Silveira Silva
-Descrição: Corrige a identificação individual das marcações originais e manuais.
-Versão: 2026.09.03-06
+Descrição: Atualiza a identificação de marcações e o relatório mensal.
+Versão: 2026.09.03-07
 
 Alterações:
-- Usa orig_m1, orig_m2, orig_m3 e orig_m4 como fonte de verdade.
-- Classifica horários independentemente da coluna em que aparecem.
-- Consome cada ocorrência original somente uma vez, tratando duplicidades.
-- Exibe R (registrado) e I (inserido) na tela Banco de Horas.
-- Usa a mesma classificação no relatório PDF.
-- Remove a coluna Justificativa do PDF.
-- Exibe a justificativa em uma linha adicional, mesclando as quatro células de horários.
-- Reforça o contraste para impressão em preto e branco.
-- Mantém A4 retrato, uma única página e os totais em horas e minutos.
+- Exibe somente * nos horários realmente inseridos manualmente.
+- Não usa R ou I nos horários obtidos do sistema.
+- Compara os horários atuais com todas as marcações originais do dia,
+  independentemente da posição, consumindo cada ocorrência uma única vez.
+- Aplica a mesma classificação na tela Banco de Horas e no PDF.
+- No PDF, a justificativa fica na mesma linha do dia, centralizada, ocupando
+  a área mesclada das quatro marcações.
+- Move a legenda de marcação manual para baixo da tabela.
+- Converte todo o relatório para preto, branco e tons de cinza, inclusive
+  saldos positivos, negativos e totais.
+- Mantém A4 retrato, uma única página e totais em horas e minutos.
 """
 
 import os
@@ -24,12 +26,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-VERSAO = "2026.09.03-06"
+VERSAO = "2026.09.03-07"
 BASE_DIR = Path(__file__).resolve().parent
 AGORA = datetime.now()
-IDENTIFICADOR = AGORA.strftime("%Y%m%d_%H%M%S")
-PASTA_BACKUP = BASE_DIR / f"backup_atualizacao_{IDENTIFICADOR}"
-RELATORIO_EXECUCAO = BASE_DIR / f"relatorio_atualizacao_{IDENTIFICADOR}.txt"
+ID_EXECUCAO = AGORA.strftime("%Y%m%d_%H%M%S")
+PASTA_BACKUP = BASE_DIR / f"backup_atualizacao_{ID_EXECUCAO}"
+ARQUIVO_RELATORIO = BASE_DIR / f"relatorio_atualizacao_{ID_EXECUCAO}.txt"
 
 
 @dataclass
@@ -66,11 +68,9 @@ def get_banco_horas(mes_ano):
         10 orig_m3
         11 orig_m4
     """
-
     init_db()
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-
     cursor.execute(
         """
         SELECT
@@ -95,7 +95,6 @@ def get_banco_horas(mes_ano):
         """,
         (f"%/{mes_ano}",)
     )
-
     rows = cursor.fetchall()
     conn.close()
     return rows
@@ -105,14 +104,12 @@ def get_banco_horas(mes_ano):
 NOVO_ATUALIZAR_LISTA_BANCO = r'''
     def atualizar_lista_banco(self):
         """
-        Atualiza a tabela e identifica cada horário individualmente.
+        Atualiza a tela Banco de Horas.
 
-        R = marcação registrada pelo sistema.
-        I = marcação inserida ou alterada manualmente.
-
-        A comparação não depende da coluna. Assim, uma marcação original
-        que foi deslocada de M2 para M3 continua sendo classificada como R.
+        Somente horários que não correspondem a uma ocorrência original do
+        dia recebem *. A posição da marcação não interfere na comparação.
         """
+        from collections import Counter
 
         for item in self.tree_banco.get_children():
             self.tree_banco.delete(item)
@@ -121,32 +118,49 @@ NOVO_ATUALIZAR_LISTA_BANCO = r'''
         if not mes_sel:
             return
 
+        def normalizar(valor):
+            if valor is None:
+                return ""
+            texto = str(valor).strip()
+            if texto.lower() in ("", "-", "--:--", "none", "null"):
+                return ""
+            return texto
+
         try:
             registros = database.get_banco_horas(mes_sel)
 
             for registro in registros:
-                atuais = registro[1:5]
-                originais = registro[8:12]
+                atuais = list(registro[1:5])
+                originais = list(registro[8:12]) if len(registro) >= 12 else []
+                manual_linha = bool(registro[6]) if len(registro) > 6 else False
 
-                origens = relatorio.classificar_origem_marcacoes(
-                    atuais,
-                    originais
+                contador = Counter(
+                    normalizar(valor)
+                    for valor in originais
+                    if normalizar(valor)
                 )
-
+                existem_originais = bool(contador)
                 horarios_exibicao = []
+                possui_inserido = False
 
-                for horario, origem in zip(atuais, origens):
-                    valor = relatorio.normalizar_horario(horario)
+                for valor in atuais:
+                    horario = normalizar(valor)
+                    if not horario:
+                        horarios_exibicao.append("")
+                        continue
 
-                    if not valor:
-                        horarios_exibicao.append("-")
-                    elif origem == "sistema":
-                        horarios_exibicao.append(f"R  {valor}")
+                    if contador[horario] > 0:
+                        contador[horario] -= 1
+                        horarios_exibicao.append(horario)
+                    elif not existem_originais and not manual_linha:
+                        # Compatibilidade com registros antigos que ainda não
+                        # possuam cópia das marcações originais.
+                        horarios_exibicao.append(horario)
                     else:
-                        horarios_exibicao.append(f"I  {valor}")
+                        horarios_exibicao.append(f"* {horario}")
+                        possui_inserido = True
 
                 dia_str = database.get_dia_semana(registro[0])
-
                 valores = (
                     registro[0],
                     dia_str,
@@ -159,9 +173,7 @@ NOVO_ATUALIZAR_LISTA_BANCO = r'''
                     registro[6]
                 )
 
-                possui_inserido = "manual" in origens
                 tags = ("possui_inserido",) if possui_inserido else ()
-
                 self.tree_banco.insert(
                     "",
                     "end",
@@ -181,18 +193,16 @@ NOVO_ATUALIZAR_LISTA_BANCO = r'''
 
 METODO_LIMPAR_INDICADOR = r'''
     def limpar_indicador_origem(self, valor):
-        """Remove os prefixos visuais R e I antes da edição."""
-
+        """Remove o asterisco visual antes de carregar o horário na edição."""
         if valor is None:
             return ""
 
         texto = str(valor).strip()
-
-        if texto in ("", "-", "None", "--:--"):
+        if texto.lower() in ("", "-", "--:--", "none", "null"):
             return ""
 
         return re.sub(
-            r"^[RI]\s+",
+            r"^(?:\*|R|I)\s*",
             "",
             texto
         ).strip()
@@ -202,7 +212,6 @@ METODO_LIMPAR_INDICADOR = r'''
 NOVO_CARREGAR_EDICAO_BANCO = r'''
     def carregar_edicao_banco(self, event=None):
         selected = self.tree_banco.selection()
-
         if not selected:
             return
 
@@ -230,21 +239,11 @@ NOVO_CARREGAR_EDICAO_BANCO = r'''
         )
 
         self.ent_banco_justificativa.delete(0, tk.END)
-
         if len(item_values) > 7 and item_values[7] != "None":
-            self.ent_banco_justificativa.insert(
-                0,
-                item_values[7]
-            )
+            self.ent_banco_justificativa.insert(0, item_values[7])
 
-        self.btn_cancelar_banco.pack(
-            side=tk.LEFT,
-            padx=10
-        )
-        self.btn_restaurar_banco.pack(
-            side=tk.LEFT,
-            padx=10
-        )
+        self.btn_cancelar_banco.pack(side=tk.LEFT, padx=10)
+        self.btn_restaurar_banco.pack(side=tk.LEFT, padx=10)
 '''
 
 
@@ -254,9 +253,11 @@ Descrição: Relatório mensal do Banco de Horas em PDF.
 
 - A4 retrato.
 - Uma única página.
-- R identifica marcação registrada pelo sistema.
-- I identifica marcação inserida ou alterada manualmente.
-- A classificação é independente da posição da marcação.
+- Somente * identifica horário inserido manualmente.
+- Horários obtidos do sistema não recebem prefixo.
+- A classificação independe da posição da marcação.
+- Justificativas ocupam, na mesma linha do dia, a área mesclada dos horários.
+- Relatório integralmente em preto, branco e tons de cinza.
 """
 
 import datetime
@@ -264,128 +265,72 @@ from collections import Counter
 
 COR_PRETO = "#000000"
 COR_BRANCO = "#FFFFFF"
-COR_CINZA_1 = "#F0F0F0"
-COR_CINZA_2 = "#D0D0D0"
-COR_CINZA_3 = "#707070"
-COR_CINZA_4 = "#303030"
-COR_VERDE = "#166534"
-COR_VERMELHO = "#991B1B"
-COR_CABECALHO = "#111827"
-COR_BORDA = "#404040"
+COR_CINZA_CLARO = "#F2F2F2"
+COR_CINZA_MEDIO = "#B8B8B8"
+COR_CINZA_ESCURO = "#404040"
+COR_CABECALHO = "#202020"
+COR_BORDA = "#505050"
 
 
 def normalizar_horario(valor):
-    """Normaliza horários vazios para comparação."""
-
     if valor is None:
         return ""
-
     texto = str(valor).strip()
-
-    if texto.lower() in (
-        "",
-        "-",
-        "--:--",
-        "none",
-        "null"
-    ):
+    if texto.lower() in ("", "-", "--:--", "none", "null"):
         return ""
-
     return texto
 
 
 def formatar_valor(valor, vazio="-"):
-    if valor is None:
-        return vazio
-
-    texto = str(valor).strip()
-
-    if texto.lower() in ("", "none", "null"):
-        return vazio
-
-    return texto
+    texto = normalizar_horario(valor)
+    return texto if texto else vazio
 
 
-def classificar_origem_marcacoes(
-    marcacoes_atuais,
-    marcacoes_originais
-):
+def classificar_origem_marcacoes(atuais, originais, registro_manual=False):
     """
-    Classifica cada marcação atual como sistema, manual ou vazio.
+    Classifica cada horário atual como sistema, manual ou vazio.
 
-    A posição não é considerada. Cada ocorrência original pode validar
-    apenas uma ocorrência atual, inclusive quando há horários repetidos.
-
-    Exemplo:
-        originais = 09:00, 13:00, 18:00
-        atuais    = 09:00, 12:00, 13:00, 18:00
-        resultado = sistema, manual, sistema, sistema
+    Cada ocorrência original pode validar uma única ocorrência atual. Dessa
+    forma, horários registrados continuam sendo reconhecidos mesmo depois de
+    mudarem de M2 para M3 ou de M3 para M4.
     """
-
-    disponiveis = Counter()
-
-    for horario in marcacoes_originais:
-        normalizado = normalizar_horario(horario)
-        if normalizado:
-            disponiveis[normalizado] += 1
-
+    contador = Counter(
+        normalizar_horario(valor)
+        for valor in originais
+        if normalizar_horario(valor)
+    )
+    existem_originais = bool(contador)
     resultado = []
 
-    for horario in marcacoes_atuais:
-        normalizado = normalizar_horario(horario)
-
-        if not normalizado:
+    for valor in atuais:
+        horario = normalizar_horario(valor)
+        if not horario:
             resultado.append("vazio")
-        elif disponiveis[normalizado] > 0:
+        elif contador[horario] > 0:
+            contador[horario] -= 1
             resultado.append("sistema")
-            disponiveis[normalizado] -= 1
+        elif not existem_originais and not registro_manual:
+            resultado.append("sistema")
         else:
             resultado.append("manual")
 
     return resultado
 
 
-def horario_foi_alterado(
-    horario_atual,
-    marcacoes_originais,
-    marcacoes_atuais=None
-):
-    """Compatibilidade: informa se um horário não existe nos originais."""
-
-    atual = normalizar_horario(horario_atual)
-    if not atual:
-        return False
-
-    originais = [
-        normalizar_horario(item)
-        for item in marcacoes_originais
-    ]
-
-    return atual not in originais
-
-
 def saldo_para_minutos(saldo):
-    if saldo is None:
-        return 0
-
-    texto = str(saldo).strip()
+    texto = str(saldo or "").strip()
     if not texto:
         return 0
 
     sinal = -1 if texto.startswith("-") else 1
-    texto = texto.replace("+", "").replace("-", "")
-    partes = texto.split(":")
-
+    partes = texto.replace("+", "").replace("-", "").split(":")
     if len(partes) != 2:
         return 0
 
     try:
-        horas = int(partes[0])
-        minutos = int(partes[1])
+        return sinal * (int(partes[0]) * 60 + int(partes[1]))
     except (TypeError, ValueError):
         return 0
-
-    return sinal * (horas * 60 + minutos)
 
 
 def minutos_para_horas(total):
@@ -409,7 +354,6 @@ def calcular_totais_saldo(registros):
         minutos = saldo_para_minutos(
             registro[5] if len(registro) > 5 else ""
         )
-
         if minutos > 0:
             positivos += minutos
         elif minutos < 0:
@@ -420,7 +364,6 @@ def calcular_totais_saldo(registros):
 
 def obter_dia_semana(data):
     dias = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
-
     try:
         objeto = datetime.datetime.strptime(str(data), "%d/%m/%Y")
         return dias[objeto.weekday()]
@@ -437,17 +380,14 @@ def quebrar_texto(texto, largura, fonte, tamanho, max_linhas=2):
 
     linhas = []
     atual = ""
-
     for palavra in palavras:
         candidato = palavra if not atual else atual + " " + palavra
-
         if stringWidth(candidato, fonte, tamanho) <= largura:
             atual = candidato
         else:
             if atual:
                 linhas.append(atual)
             atual = palavra
-
             if len(linhas) >= max_linhas:
                 break
 
@@ -455,17 +395,16 @@ def quebrar_texto(texto, largura, fonte, tamanho, max_linhas=2):
         linhas.append(atual)
 
     original = " ".join(palavras)
-    reconstruido = " ".join(linhas)
-
-    if linhas and reconstruido != original:
+    if linhas and " ".join(linhas) != original:
         ultima = linhas[-1]
-
         while ultima:
             candidato = ultima.rstrip() + "..."
             if stringWidth(candidato, fonte, tamanho) <= largura:
                 linhas[-1] = candidato
                 break
             ultima = ultima[:-1]
+        if not ultima:
+            linhas[-1] = "..."
 
     return linhas[:max_linhas]
 
@@ -478,8 +417,8 @@ def desenhar_celula(
     altura,
     texto,
     tamanho,
-    cor_texto,
-    cor_fundo,
+    cor_texto=COR_PRETO,
+    cor_fundo=COR_BRANCO,
     negrito=False,
     alinhamento="center",
     max_linhas=1,
@@ -499,18 +438,18 @@ def desenhar_celula(
 
     linhas = quebrar_texto(
         texto,
-        max(1, largura - 5),
+        max(1, largura - 6),
         fonte,
         tamanho,
         max_linhas
     )
-
-    entrelinha = tamanho + 0.8
-    inicio_y = y + altura / 2 + (len(linhas) - 1) * entrelinha / 2 - tamanho * 0.35
+    entrelinha = tamanho + 0.7
+    inicio_y = (
+        y + altura / 2 + (len(linhas) - 1) * entrelinha / 2 - tamanho * 0.35
+    )
 
     for indice, linha in enumerate(linhas):
         linha_y = inicio_y - indice * entrelinha
-
         if alinhamento == "left":
             pdf.drawString(x + 3, linha_y, linha)
         elif alinhamento == "right":
@@ -519,20 +458,11 @@ def desenhar_celula(
             pdf.drawCentredString(x + largura / 2, linha_y, linha)
 
 
-def desenhar_total(
-    pdf,
-    x,
-    y,
-    largura,
-    altura,
-    titulo,
-    minutos,
-    cor
-):
+def desenhar_total(pdf, x, y, largura, altura, titulo, minutos):
     from reportlab.lib import colors
     from reportlab.pdfbase.pdfmetrics import stringWidth
 
-    pdf.setFillColor(colors.HexColor(COR_CINZA_1))
+    pdf.setFillColor(colors.HexColor(COR_CINZA_CLARO))
     pdf.setStrokeColor(colors.HexColor(COR_BORDA))
     pdf.setLineWidth(0.7)
     pdf.roundRect(x, y, largura, altura, 3, stroke=1, fill=1)
@@ -543,28 +473,14 @@ def desenhar_total(
 
     horas = minutos_para_horas(minutos)
     texto_minutos = f"({minutos_com_sinal(minutos)})"
-    tam_horas = 11
-    tam_minutos = 6.5
-    espaco = 4
+    largura_horas = stringWidth(horas, "Helvetica-Bold", 11)
+    largura_minutos = stringWidth(texto_minutos, "Helvetica", 7)
+    inicio = x + (largura - largura_horas - largura_minutos - 5) / 2
 
-    largura_total = (
-        stringWidth(horas, "Helvetica-Bold", tam_horas)
-        + espaco
-        + stringWidth(texto_minutos, "Helvetica", tam_minutos)
-    )
-    inicio = x + (largura - largura_total) / 2
-
-    pdf.setFillColor(colors.HexColor(cor))
-    pdf.setFont("Helvetica-Bold", tam_horas)
+    pdf.setFont("Helvetica-Bold", 11)
     pdf.drawString(inicio, y + 7, horas)
-
-    pdf.setFillColor(colors.HexColor(COR_CINZA_4))
-    pdf.setFont("Helvetica", tam_minutos)
-    pdf.drawString(
-        inicio + stringWidth(horas, "Helvetica-Bold", tam_horas) + espaco,
-        y + 8.5,
-        texto_minutos
-    )
+    pdf.setFont("Helvetica", 7)
+    pdf.drawString(inicio + largura_horas + 5, y + 8, texto_minutos)
 
 
 def gerar_pdf(
@@ -577,70 +493,56 @@ def gerar_pdf(
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import mm
-    from reportlab.pdfgen import canvas
+    from reportlab.pdfgen import canvas as pdf_canvas
 
     if not registros:
         raise ValueError("Não existem registros para gerar o relatório.")
 
     largura_pagina, altura_pagina = A4
-    pdf = canvas.Canvas(str(caminho_arquivo), pagesize=A4, pageCompression=1)
+    pdf = pdf_canvas.Canvas(
+        str(caminho_arquivo),
+        pagesize=A4,
+        pageCompression=1
+    )
     pdf.setTitle(f"Banco de Horas - {mes_ano}")
     pdf.setAuthor("Assistente do PontoWeb MGS")
 
-    margem_x = 7 * mm
-    margem_superior = 7 * mm
-    margem_inferior = 7 * mm
+    margem_x = 8 * mm
+    margem_topo = 8 * mm
+    margem_base = 8 * mm
     largura_util = largura_pagina - 2 * margem_x
+    centro = largura_pagina / 2
 
-    y = altura_pagina - margem_superior
-
-    pdf.setFillColor(colors.HexColor(COR_CABECALHO))
+    y = altura_pagina - margem_topo
+    pdf.setFillColor(colors.HexColor(COR_PRETO))
     pdf.setFont("Helvetica-Bold", 15)
-    pdf.drawCentredString(largura_pagina / 2, y - 10, "Relatório de Banco de Horas")
+    pdf.drawCentredString(centro, y - 10, "Relatório de Banco de Horas")
     y -= 24
 
-    info = [f"Período: {mes_ano}"]
+    informacoes = [f"Período: {mes_ano}"]
     if matricula:
-        info.append(f"Matrícula: {matricula}")
-    info.append("Emissão: " + datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
-
-    pdf.setFillColor(colors.HexColor(COR_PRETO))
-    pdf.setFont("Helvetica", 7)
-    pdf.drawCentredString(largura_pagina / 2, y, "    |    ".join(info))
-    y -= 12
-
-    # Legenda de alto contraste para impressão em preto e branco.
-    pdf.setFont("Helvetica-Bold", 6.5)
-    pdf.setFillColor(colors.HexColor(COR_PRETO))
-    pdf.drawString(margem_x, y, "R  Registrado pelo sistema")
-
-    pdf.setFillColor(colors.HexColor(COR_CINZA_4))
-    pdf.rect(margem_x + 61 * mm, y - 2, 8, 8, stroke=0, fill=1)
-    pdf.setFillColor(colors.HexColor(COR_PRETO))
-    pdf.drawString(margem_x + 61 * mm + 11, y, "I  Inserido ou alterado manualmente")
+        informacoes.append(f"Matrícula: {matricula}")
+    informacoes.append(
+        "Emissão: " + datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    )
+    pdf.setFont("Helvetica", 7.5)
+    pdf.drawCentredString(centro, y, "    |    ".join(informacoes))
     y -= 12
 
     altura_totais = 18 * mm
+    altura_legenda = 9 * mm
     altura_rodape = 7 * mm
-    limite_tabela = margem_inferior + altura_rodape + altura_totais + 4 * mm
+    limite_tabela = (
+        margem_base + altura_rodape + altura_totais + altura_legenda + 5 * mm
+    )
     topo_tabela = y
-
-    linhas_visuais = 1
-    for registro in registros:
-        linhas_visuais += 1
-        justificativa = formatar_valor(
-            registro[7] if len(registro) > 7 else "",
-            ""
-        )
-        if justificativa:
-            linhas_visuais += 1
-
     altura_disponivel = topo_tabela - limite_tabela
-    altura_linha = altura_disponivel / max(1, linhas_visuais)
-    fonte_corpo = min(7.0, max(3.8, altura_linha * 0.35))
-    fonte_cabecalho = min(6.5, max(3.8, altura_linha * 0.33))
+    quantidade_linhas = len(registros) + 1
+    altura_linha = altura_disponivel / quantidade_linhas
+    fonte_corpo = min(7.2, max(4.2, altura_linha * 0.34))
+    fonte_cabecalho = min(6.7, max(4.1, altura_linha * 0.31))
 
-    proporcoes = [0.14, 0.07, 0.145, 0.16, 0.17, 0.145, 0.17]
+    proporcoes = [0.15, 0.08, 0.14, 0.16, 0.16, 0.14, 0.17]
     larguras = [largura_util * valor for valor in proporcoes]
     cabecalhos = [
         "Data",
@@ -654,17 +556,27 @@ def gerar_pdf(
 
     linha_y = topo_tabela - altura_linha
     x = margem_x
-
-    for indice, titulo in enumerate(cabecalhos):
+    for indice, cabecalho in enumerate(cabecalhos):
         desenhar_celula(
-            pdf, x, linha_y, larguras[indice], altura_linha,
-            titulo, fonte_cabecalho, COR_BRANCO, COR_CABECALHO,
-            negrito=True, max_linhas=2, borda=0.7
+            pdf,
+            x,
+            linha_y,
+            larguras[indice],
+            altura_linha,
+            cabecalho,
+            fonte_cabecalho,
+            cor_texto=COR_BRANCO,
+            cor_fundo=COR_CABECALHO,
+            negrito=True,
+            max_linhas=2
         )
         x += larguras[indice]
 
     for indice_registro, registro in enumerate(registros):
         linha_y -= altura_linha
+        fundo_linha = (
+            COR_BRANCO if indice_registro % 2 == 0 else COR_CINZA_CLARO
+        )
 
         data = formatar_valor(registro[0] if len(registro) > 0 else "")
         atuais = [
@@ -673,118 +585,146 @@ def gerar_pdf(
             registro[3] if len(registro) > 3 else "",
             registro[4] if len(registro) > 4 else ""
         ]
-        saldo = formatar_valor(registro[5] if len(registro) > 5 else "", "")
-        justificativa = formatar_valor(registro[7] if len(registro) > 7 else "", "")
+        saldo = formatar_valor(
+            registro[5] if len(registro) > 5 else "",
+            ""
+        )
+        manual_linha = bool(registro[6]) if len(registro) > 6 else False
+        justificativa = normalizar_horario(
+            registro[7] if len(registro) > 7 else ""
+        )
         originais = [
             registro[8] if len(registro) > 8 else "",
             registro[9] if len(registro) > 9 else "",
             registro[10] if len(registro) > 10 else "",
             registro[11] if len(registro) > 11 else ""
         ]
+        origens = classificar_origem_marcacoes(
+            atuais,
+            originais,
+            manual_linha
+        )
 
-        origens = classificar_origem_marcacoes(atuais, originais)
-        fundo_linha = COR_BRANCO if indice_registro % 2 == 0 else COR_CINZA_1
-        valores = [data, obter_dia_semana(data)] + atuais + [saldo]
-        x = margem_x
+        # Data e dia sempre permanecem visíveis.
+        desenhar_celula(
+            pdf, margem_x, linha_y, larguras[0], altura_linha,
+            data, fonte_corpo, cor_fundo=fundo_linha
+        )
+        desenhar_celula(
+            pdf, margem_x + larguras[0], linha_y, larguras[1], altura_linha,
+            obter_dia_semana(data), fonte_corpo, cor_fundo=fundo_linha
+        )
 
-        for coluna, valor in enumerate(valores):
-            texto = formatar_valor(valor)
-            cor_fundo = fundo_linha
-            cor_texto = COR_PRETO
-            negrito = False
+        inicio_horarios = margem_x + larguras[0] + larguras[1]
+        largura_horarios = sum(larguras[2:6])
 
-            if 2 <= coluna <= 5:
-                origem = origens[coluna - 2]
+        if justificativa:
+            # A justificativa substitui visualmente as quatro marcações,
+            # permanecendo na mesma linha do dia e centralizada.
+            desenhar_celula(
+                pdf,
+                inicio_horarios,
+                linha_y,
+                largura_horarios,
+                altura_linha,
+                justificativa,
+                fonte_corpo,
+                cor_texto=COR_PRETO,
+                cor_fundo=fundo_linha,
+                negrito=True,
+                alinhamento="center",
+                max_linhas=2,
+                borda=0.65
+            )
+        else:
+            x = inicio_horarios
+            for indice, valor in enumerate(atuais):
                 horario = normalizar_horario(valor)
+                origem = origens[indice]
+                texto = horario if horario else "-"
+                cor_fundo = fundo_linha
+                cor_texto = COR_PRETO
+                negrito = False
 
-                if not horario:
-                    texto = "-"
-                elif origem == "sistema":
-                    texto = f"R  {horario}"
-                    cor_fundo = COR_BRANCO
-                    cor_texto = COR_PRETO
-                    negrito = True
-                else:
-                    texto = f"I  {horario}"
-                    cor_fundo = COR_CINZA_4
+                if origem == "manual":
+                    texto = f"* {horario}"
+                    cor_fundo = COR_CINZA_ESCURO
                     cor_texto = COR_BRANCO
                     negrito = True
 
-            elif coluna == 6:
-                minutos = saldo_para_minutos(valor)
-                negrito = True
-                if minutos > 0:
-                    cor_texto = COR_VERDE
-                elif minutos < 0:
-                    cor_texto = COR_VERMELHO
-                else:
-                    cor_texto = COR_CINZA_4
+                desenhar_celula(
+                    pdf,
+                    x,
+                    linha_y,
+                    larguras[indice + 2],
+                    altura_linha,
+                    texto,
+                    fonte_corpo,
+                    cor_texto=cor_texto,
+                    cor_fundo=cor_fundo,
+                    negrito=negrito
+                )
+                x += larguras[indice + 2]
 
-            desenhar_celula(
-                pdf, x, linha_y, larguras[coluna], altura_linha,
-                texto, fonte_corpo, cor_texto, cor_fundo,
-                negrito=negrito, max_linhas=1
-            )
-            x += larguras[coluna]
+        # Saldo também permanece em preto e branco, sem verde ou vermelho.
+        desenhar_celula(
+            pdf,
+            inicio_horarios + largura_horarios,
+            linha_y,
+            larguras[6],
+            altura_linha,
+            saldo,
+            fonte_corpo,
+            cor_texto=COR_PRETO,
+            cor_fundo=fundo_linha,
+            negrito=True
+        )
 
-        if justificativa:
-            linha_y -= altura_linha
-
-            # Data e dia permanecem vazios; as quatro células de horários
-            # são mescladas para receber a justificativa.
-            desenhar_celula(
-                pdf, margem_x, linha_y, larguras[0], altura_linha,
-                "", fonte_corpo, COR_PRETO, COR_CINZA_2
-            )
-            desenhar_celula(
-                pdf, margem_x + larguras[0], linha_y, larguras[1], altura_linha,
-                "", fonte_corpo, COR_PRETO, COR_CINZA_2
-            )
-
-            x_just = margem_x + larguras[0] + larguras[1]
-            largura_just = sum(larguras[2:6])
-
-            desenhar_celula(
-                pdf, x_just, linha_y, largura_just, altura_linha,
-                "Justificativa: " + justificativa,
-                fonte_corpo, COR_PRETO, COR_CINZA_2,
-                negrito=True, alinhamento="left", max_linhas=2,
-                borda=0.7
-            )
-
-            desenhar_celula(
-                pdf, x_just + largura_just, linha_y, larguras[6], altura_linha,
-                "", fonte_corpo, COR_PRETO, COR_CINZA_2
-            )
+    # Legenda posicionada imediatamente abaixo da tabela.
+    legenda_y = linha_y - 5 * mm
+    pdf.setFillColor(colors.HexColor(COR_CINZA_ESCURO))
+    pdf.setStrokeColor(colors.HexColor(COR_PRETO))
+    pdf.rect(margem_x, legenda_y, 8, 8, stroke=1, fill=1)
+    pdf.setFillColor(colors.HexColor(COR_BRANCO))
+    pdf.setFont("Helvetica-Bold", 7)
+    pdf.drawCentredString(margem_x + 4, legenda_y + 1.5, "*")
+    pdf.setFillColor(colors.HexColor(COR_PRETO))
+    pdf.setFont("Helvetica", 7)
+    pdf.drawString(
+        margem_x + 12,
+        legenda_y + 1.5,
+        "Horário inserido ou alterado manualmente"
+    )
 
     positivos, negativos, resultado = calcular_totais_saldo(registros)
-    y_totais = margem_inferior + altura_rodape + 2 * mm
-    espaco = 2.5 * mm
+    y_totais = margem_base + altura_rodape + 2 * mm
+    espaco = 3 * mm
     largura_caixa = (largura_util - 2 * espaco) / 3
 
     desenhar_total(
         pdf, margem_x, y_totais, largura_caixa, altura_totais,
-        "Horas positivas", positivos, COR_VERDE
+        "Horas positivas", positivos
     )
     desenhar_total(
         pdf, margem_x + largura_caixa + espaco, y_totais,
-        largura_caixa, altura_totais,
-        "Horas negativas", negativos, COR_VERMELHO
+        largura_caixa, altura_totais, "Horas negativas", negativos
     )
-
-    cor_resultado = COR_VERDE if resultado > 0 else COR_VERMELHO if resultado < 0 else COR_CINZA_4
     desenhar_total(
         pdf, margem_x + 2 * (largura_caixa + espaco), y_totais,
-        largura_caixa, altura_totais,
-        "Resultado final", resultado, cor_resultado
+        largura_caixa, altura_totais, "Resultado final", resultado
     )
 
     pdf.setStrokeColor(colors.HexColor(COR_BORDA))
-    pdf.line(margem_x, margem_inferior + 5, largura_pagina - margem_x, margem_inferior + 5)
-    pdf.setFillColor(colors.HexColor(COR_CINZA_4))
+    pdf.setLineWidth(0.4)
+    pdf.line(margem_x, margem_base + 6, largura_pagina - margem_x, margem_base + 6)
+    pdf.setFillColor(colors.HexColor(COR_PRETO))
     pdf.setFont("Helvetica", 6)
-    pdf.drawString(margem_x, margem_inferior, "Assistente do PontoWeb MGS")
-    pdf.drawRightString(largura_pagina - margem_x, margem_inferior, "Página 1 de 1")
+    pdf.drawString(margem_x, margem_base, "Assistente do PontoWeb MGS")
+    pdf.drawRightString(
+        largura_pagina - margem_x,
+        margem_base,
+        "Página 1 de 1"
+    )
 
     pdf.showPage()
     pdf.save()
@@ -817,21 +757,27 @@ def ler_arquivo(caminho):
     return texto, encoding, bom, newline
 
 
-def escrever_atomico(caminho, texto, encoding, bom, newline):
+def converter_bytes(texto, encoding, bom, newline):
     saida = texto if newline == "\n" else texto.replace("\n", newline)
     dados = saida.encode(encoding)
-
     if encoding == "utf-8" and bom:
         dados = b"\xef\xbb\xbf" + dados
+    return dados
 
+
+def escrever_atomico(caminho, texto, encoding, bom, newline):
     temporario = caminho.with_name(caminho.name + ".atualizando")
-
     try:
-        temporario.write_bytes(dados)
+        temporario.write_bytes(
+            converter_bytes(texto, encoding, bom, newline)
+        )
         os.replace(str(temporario), str(caminho))
     finally:
         if temporario.exists():
-            temporario.unlink()
+            try:
+                temporario.unlink()
+            except OSError:
+                pass
 
 
 def validar(texto, nome):
@@ -850,21 +796,21 @@ def localizar_bloco(texto, nome, indentacao):
         rf"(?m)^{re.escape(prefixo)}def {re.escape(nome)}\s*\(",
         texto
     )
-
     if not inicio_match:
         return None
 
     inicio = inicio_match.start()
+    trecho = texto[inicio_match.end():]
 
     if indentacao == 0:
         fim_match = re.search(
             r"(?m)^(?:def |class |if __name__)",
-            texto[inicio_match.end():]
+            trecho
         )
     else:
         fim_match = re.search(
             r"(?m)^(?:    def |class |if __name__)",
-            texto[inicio_match.end():]
+            trecho
         )
 
     fim = (
@@ -872,13 +818,11 @@ def localizar_bloco(texto, nome, indentacao):
         if fim_match
         else len(texto)
     )
-
     return inicio, fim
 
 
 def substituir_bloco(texto, nome, indentacao, novo_codigo):
     local = localizar_bloco(texto, nome, indentacao)
-
     if not local:
         raise RuntimeError(f"Não foi possível localizar {nome}.")
 
@@ -888,7 +832,6 @@ def substituir_bloco(texto, nome, indentacao, novo_codigo):
 
 def inserir_metodo_antes(texto, nome_referencia, novo_codigo):
     local = localizar_bloco(texto, nome_referencia, 4)
-
     if not local:
         raise RuntimeError(
             f"Não foi possível localizar o método {nome_referencia}."
@@ -896,6 +839,28 @@ def inserir_metodo_antes(texto, nome_referencia, novo_codigo):
 
     inicio, _ = local
     return texto[:inicio] + novo_codigo.strip("\n") + "\n\n" + texto[inicio:]
+
+
+def remover_legendas_antigas(texto):
+    # Remove o bloco de legenda criado pela versão 06, caso já tenha sido
+    # aplicado. O padrão termina no fechamento de pack(pady=(0, 2)).
+    texto = re.sub(
+        r'''(?ms)\n\s*# LEGENDA_ORIGEM_MARCACOES_V2\n'''
+        r'''\s*tk\.Label\(.*?\)\.pack\(\s*pady=\(0, 2\)\s*\)''',
+        "",
+        texto,
+        count=1
+    )
+
+    # Remove eventual legenda V3 para permitir atualização idempotente.
+    texto = re.sub(
+        r'''(?ms)\n\s*# LEGENDA_ORIGEM_MARCACOES_V3\n'''
+        r'''\s*tk\.Label\(.*?\)\.pack\(\s*pady=\(0, 2\)\s*\)''',
+        "",
+        texto,
+        count=1
+    )
+    return texto
 
 
 def atualizar_database(texto):
@@ -936,20 +901,23 @@ def atualizar_main(texto):
         NOVO_CARREGAR_EDICAO_BANCO
     )
 
-    # Substitui a configuração antiga de linha inteira.
     texto = texto.replace(
         'self.tree_banco.tag_configure("manual", foreground=settings.COLOR_YELLOW)',
-        'self.tree_banco.tag_configure("possui_inserido", background="#E2E2E2")'
+        'self.tree_banco.tag_configure("possui_inserido", background="#F0F0F0")'
+    )
+    texto = texto.replace(
+        'self.tree_banco.tag_configure("possui_inserido", background="#E2E2E2")',
+        'self.tree_banco.tag_configure("possui_inserido", background="#F0F0F0")'
     )
 
-    marcador_legenda = "# LEGENDA_ORIGEM_MARCACOES_V2"
+    texto = remover_legendas_antigas(texto)
+    marcador = "# LEGENDA_ORIGEM_MARCACOES_V3"
 
-    if marcador_legenda not in texto:
+    if marcador not in texto:
         alvo = (
             '        self.tree_banco.bind("<<TreeviewSelect>>", '
             'self.carregar_edicao_banco)'
         )
-
         if alvo not in texto:
             raise RuntimeError(
                 "Não foi possível localizar o vínculo da tabela Banco de Horas."
@@ -957,20 +925,16 @@ def atualizar_main(texto):
 
         legenda = alvo + r'''
 
-        # LEGENDA_ORIGEM_MARCACOES_V2
+        # LEGENDA_ORIGEM_MARCACOES_V3
         tk.Label(
             self.win_banco,
-            text=(
-                "R = registrado pelo sistema    |    "
-                "I = inserido ou alterado manualmente"
-            ),
+            text="* Horário inserido ou alterado manualmente",
             bg=settings.COLOR_BG,
             fg="#303030",
             font=("Segoe UI", 9, "bold")
         ).pack(
             pady=(0, 2)
         )'''
-
         texto = texto.replace(alvo, legenda, 1)
 
     return texto
@@ -978,11 +942,8 @@ def atualizar_main(texto):
 
 def preparar_existente(nomes, transformador):
     caminho = localizar_arquivo(*nomes)
-
     if not caminho:
-        raise RuntimeError(
-            "Arquivo não encontrado: " + " / ".join(nomes)
-        )
+        raise RuntimeError("Arquivo não encontrado: " + " / ".join(nomes))
 
     original, encoding, bom, newline = ler_arquivo(caminho)
     validar(original, caminho.name)
@@ -990,51 +951,50 @@ def preparar_existente(nomes, transformador):
     validar(atualizado, caminho.name)
 
     return ArquivoPreparado(
-        caminho,
-        original,
-        atualizado,
-        encoding,
-        bom,
-        newline
+        caminho=caminho,
+        original=original,
+        atualizado=atualizado,
+        encoding=encoding,
+        bom=bom,
+        newline=newline
     )
 
 
 def preparar_relatorio():
     caminho = localizar_arquivo("relatorio.py", "relatorio.pyw")
+    validar(CONTEUDO_RELATORIO, "relatorio.py")
 
     if caminho:
         original, encoding, bom, newline = ler_arquivo(caminho)
         validar(original, caminho.name)
-        novo = False
-    else:
-        caminho = BASE_DIR / "relatorio.py"
-        original = ""
-        encoding = "utf-8"
-        bom = False
-        newline = "\n"
-        novo = True
-
-    validar(CONTEUDO_RELATORIO, caminho.name)
+        return ArquivoPreparado(
+            caminho=caminho,
+            original=original,
+            atualizado=CONTEUDO_RELATORIO,
+            encoding=encoding,
+            bom=bom,
+            newline=newline
+        )
 
     return ArquivoPreparado(
-        caminho,
-        original,
-        CONTEUDO_RELATORIO,
-        encoding,
-        bom,
-        newline,
-        novo=novo
+        caminho=BASE_DIR / "relatorio.py",
+        original="",
+        atualizado=CONTEUDO_RELATORIO,
+        encoding="utf-8",
+        bom=False,
+        newline="\n",
+        novo=True
     )
 
 
 def aplicar(arquivos):
-    alterados = [a for a in arquivos if a.original != a.atualizado]
+    alterados = [
+        arquivo for arquivo in arquivos
+        if arquivo.original != arquivo.atualizado
+    ]
 
     if not alterados:
-        for arquivo in arquivos:
-            resultados.append(
-                f"{arquivo.caminho.name}: JÁ ATUALIZADO"
-            )
+        resultados.append("Todos os arquivos já estão atualizados.")
         return True
 
     PASTA_BACKUP.mkdir(parents=True, exist_ok=True)
@@ -1053,7 +1013,6 @@ def aplicar(arquivos):
                 arquivo.bom,
                 arquivo.newline
             )
-
             confirmacao, _, _, _ = ler_arquivo(arquivo.caminho)
             validar(confirmacao, arquivo.caminho.name)
 
@@ -1069,7 +1028,6 @@ def aplicar(arquivos):
                 status = "CRIADO"
             else:
                 status = "ATUALIZADO"
-
             resultados.append(f"{arquivo.caminho.name}: {status}")
 
         return True
@@ -1094,14 +1052,13 @@ def aplicar(arquivos):
 def montar_relatorio(sucesso):
     linhas = [
         "=" * 78,
-        "ATUALIZAÇÃO DA IDENTIFICAÇÃO DE MARCAÇÕES",
+        "ATUALIZAÇÃO DO RELATÓRIO E DAS MARCAÇÕES MANUAIS",
         "=" * 78,
         f"Versão: {VERSAO}",
         "Data: " + AGORA.strftime("%d/%m/%Y %H:%M:%S"),
         f"Diretório: {BASE_DIR}",
         ""
     ]
-
     linhas.extend(resultados)
     linhas.extend([
         "",
@@ -1112,8 +1069,7 @@ def montar_relatorio(sucesso):
 
 
 def main():
-    print("Preparando a atualização...")
-
+    print("Preparando a atualização 2026.09.03-07...")
     arquivos = []
 
     try:
@@ -1130,7 +1086,6 @@ def main():
             )
         )
         arquivos.append(preparar_relatorio())
-
         sucesso = aplicar(arquivos)
 
     except Exception as erro:
@@ -1139,14 +1094,17 @@ def main():
             f"FALHA NA PREPARAÇÃO: {type(erro).__name__}: {erro}"
         )
 
-    relatorio = montar_relatorio(sucesso)
+    relatorio_execucao = montar_relatorio(sucesso)
     print()
-    print(relatorio)
+    print(relatorio_execucao)
 
     try:
-        RELATORIO_EXECUCAO.write_text(relatorio, encoding="utf-8")
+        ARQUIVO_RELATORIO.write_text(
+            relatorio_execucao,
+            encoding="utf-8"
+        )
         print()
-        print(f"Relatório salvo em: {RELATORIO_EXECUCAO.name}")
+        print(f"Relatório salvo em: {ARQUIVO_RELATORIO.name}")
     except Exception as erro:
         print(f"Não foi possível salvar o relatório: {erro}")
 
@@ -1157,8 +1115,9 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except KeyboardInterrupt:
+        print("Atualização cancelada pelo usuário.")
         sys.exit(130)
     except Exception as erro:
+        print(f"Falha inesperada: {type(erro).__name__}: {erro}")
         traceback.print_exc()
-        print(f"Falha inesperada: {erro}")
         sys.exit(1)

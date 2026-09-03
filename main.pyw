@@ -1173,7 +1173,7 @@ class PontoApp:
         self.tree_banco.heading("saldo", text="Saldo Dia")
         self.tree_banco.heading("justificativa", text="Justificativa")
         
-        self.tree_banco.tag_configure("possui_inserido", background="#E2E2E2")
+        self.tree_banco.tag_configure("possui_inserido", background="#F0F0F0")
         
         self.tree_banco.column("data", width=90, anchor="center")
         self.tree_banco.column("dia", width=50, anchor="center")
@@ -1192,13 +1192,10 @@ class PontoApp:
         
         self.tree_banco.bind("<<TreeviewSelect>>", self.carregar_edicao_banco)
 
-        # LEGENDA_ORIGEM_MARCACOES_V2
+        # LEGENDA_ORIGEM_MARCACOES_V3
         tk.Label(
             self.win_banco,
-            text=(
-                "R = registrado pelo sistema    |    "
-                "I = inserido ou alterado manualmente"
-            ),
+            text="* Horário inserido ou alterado manualmente",
             bg=settings.COLOR_BG,
             fg="#303030",
             font=("Segoe UI", 9, "bold")
@@ -1530,14 +1527,12 @@ class PontoApp:
 
     def atualizar_lista_banco(self):
         """
-        Atualiza a tabela e identifica cada horário individualmente.
+        Atualiza a tela Banco de Horas.
 
-        R = marcação registrada pelo sistema.
-        I = marcação inserida ou alterada manualmente.
-
-        A comparação não depende da coluna. Assim, uma marcação original
-        que foi deslocada de M2 para M3 continua sendo classificada como R.
+        Somente horários que não correspondem a uma ocorrência original do
+        dia recebem *. A posição da marcação não interfere na comparação.
         """
+        from collections import Counter
 
         for item in self.tree_banco.get_children():
             self.tree_banco.delete(item)
@@ -1546,32 +1541,49 @@ class PontoApp:
         if not mes_sel:
             return
 
+        def normalizar(valor):
+            if valor is None:
+                return ""
+            texto = str(valor).strip()
+            if texto.lower() in ("", "-", "--:--", "none", "null"):
+                return ""
+            return texto
+
         try:
             registros = database.get_banco_horas(mes_sel)
 
             for registro in registros:
-                atuais = registro[1:5]
-                originais = registro[8:12]
+                atuais = list(registro[1:5])
+                originais = list(registro[8:12]) if len(registro) >= 12 else []
+                manual_linha = bool(registro[6]) if len(registro) > 6 else False
 
-                origens = relatorio.classificar_origem_marcacoes(
-                    atuais,
-                    originais
+                contador = Counter(
+                    normalizar(valor)
+                    for valor in originais
+                    if normalizar(valor)
                 )
-
+                existem_originais = bool(contador)
                 horarios_exibicao = []
+                possui_inserido = False
 
-                for horario, origem in zip(atuais, origens):
-                    valor = relatorio.normalizar_horario(horario)
+                for valor in atuais:
+                    horario = normalizar(valor)
+                    if not horario:
+                        horarios_exibicao.append("")
+                        continue
 
-                    if not valor:
-                        horarios_exibicao.append("-")
-                    elif origem == "sistema":
-                        horarios_exibicao.append(f"R  {valor}")
+                    if contador[horario] > 0:
+                        contador[horario] -= 1
+                        horarios_exibicao.append(horario)
+                    elif not existem_originais and not manual_linha:
+                        # Compatibilidade com registros antigos que ainda não
+                        # possuam cópia das marcações originais.
+                        horarios_exibicao.append(horario)
                     else:
-                        horarios_exibicao.append(f"I  {valor}")
+                        horarios_exibicao.append(f"* {horario}")
+                        possui_inserido = True
 
                 dia_str = database.get_dia_semana(registro[0])
-
                 valores = (
                     registro[0],
                     dia_str,
@@ -1584,9 +1596,7 @@ class PontoApp:
                     registro[6]
                 )
 
-                possui_inserido = "manual" in origens
                 tags = ("possui_inserido",) if possui_inserido else ()
-
                 self.tree_banco.insert(
                     "",
                     "end",
@@ -1603,25 +1613,22 @@ class PontoApp:
             )
 
     def limpar_indicador_origem(self, valor):
-        """Remove os prefixos visuais R e I antes da edição."""
-
+        """Remove o asterisco visual antes de carregar o horário na edição."""
         if valor is None:
             return ""
 
         texto = str(valor).strip()
-
-        if texto in ("", "-", "None", "--:--"):
+        if texto.lower() in ("", "-", "--:--", "none", "null"):
             return ""
 
         return re.sub(
-            r"^[RI]\s+",
+            r"^(?:\*|R|I)\s*",
             "",
             texto
         ).strip()
 
     def carregar_edicao_banco(self, event=None):
         selected = self.tree_banco.selection()
-
         if not selected:
             return
 
@@ -1649,21 +1656,11 @@ class PontoApp:
         )
 
         self.ent_banco_justificativa.delete(0, tk.END)
-
         if len(item_values) > 7 and item_values[7] != "None":
-            self.ent_banco_justificativa.insert(
-                0,
-                item_values[7]
-            )
+            self.ent_banco_justificativa.insert(0, item_values[7])
 
-        self.btn_cancelar_banco.pack(
-            side=tk.LEFT,
-            padx=10
-        )
-        self.btn_restaurar_banco.pack(
-            side=tk.LEFT,
-            padx=10
-        )
+        self.btn_cancelar_banco.pack(side=tk.LEFT, padx=10)
+        self.btn_restaurar_banco.pack(side=tk.LEFT, padx=10)
 
     def cancelar_edicao_banco(self):
         self.ent_banco_data.config(state=tk.NORMAL)

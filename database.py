@@ -378,11 +378,9 @@ def get_banco_horas(mes_ano):
         10 orig_m3
         11 orig_m4
     """
-
     init_db()
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-
     cursor.execute(
         """
         SELECT
@@ -407,7 +405,6 @@ def get_banco_horas(mes_ano):
         """,
         (f"%/{mes_ano}",)
     )
-
     rows = cursor.fetchall()
     conn.close()
     return rows
