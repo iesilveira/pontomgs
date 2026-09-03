@@ -1173,7 +1173,7 @@ class PontoApp:
         self.tree_banco.heading("saldo", text="Saldo Dia")
         self.tree_banco.heading("justificativa", text="Justificativa")
         
-        self.tree_banco.tag_configure("possui_inserido", background="#E2E2E2")
+        self.tree_banco.tag_configure("manual", foreground=settings.COLOR_YELLOW)
         
         self.tree_banco.column("data", width=90, anchor="center")
         self.tree_banco.column("dia", width=50, anchor="center")
@@ -1191,20 +1191,6 @@ class PontoApp:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
         self.tree_banco.bind("<<TreeviewSelect>>", self.carregar_edicao_banco)
-
-        # LEGENDA_ORIGEM_MARCACOES_V2
-        tk.Label(
-            self.win_banco,
-            text=(
-                "R = registrado pelo sistema    |    "
-                "I = inserido ou alterado manualmente"
-            ),
-            bg=settings.COLOR_BG,
-            fg="#303030",
-            font=("Segoe UI", 9, "bold")
-        ).pack(
-            pady=(0, 2)
-        )
 
         # Campos para Edição Manual
         form_frame = tk.Frame(self.win_banco, bg=settings.COLOR_BG)
@@ -1529,141 +1515,46 @@ class PontoApp:
             pass
 
     def atualizar_lista_banco(self):
-        """
-        Atualiza a tabela e identifica cada horário individualmente.
-
-        R = marcação registrada pelo sistema.
-        I = marcação inserida ou alterada manualmente.
-
-        A comparação não depende da coluna. Assim, uma marcação original
-        que foi deslocada de M2 para M3 continua sendo classificada como R.
-        """
-
         for item in self.tree_banco.get_children():
             self.tree_banco.delete(item)
-
+            
         mes_sel = self.mes_selecionado_var.get()
         if not mes_sel:
             return
-
+            
         try:
-            registros = database.get_banco_horas(mes_sel)
-
-            for registro in registros:
-                atuais = registro[1:5]
-                originais = registro[8:12]
-
-                origens = relatorio.classificar_origem_marcacoes(
-                    atuais,
-                    originais
-                )
-
-                horarios_exibicao = []
-
-                for horario, origem in zip(atuais, origens):
-                    valor = relatorio.normalizar_horario(horario)
-
-                    if not valor:
-                        horarios_exibicao.append("-")
-                    elif origem == "sistema":
-                        horarios_exibicao.append(f"R  {valor}")
-                    else:
-                        horarios_exibicao.append(f"I  {valor}")
-
-                dia_str = database.get_dia_semana(registro[0])
-
-                valores = (
-                    registro[0],
-                    dia_str,
-                    horarios_exibicao[0],
-                    horarios_exibicao[1],
-                    horarios_exibicao[2],
-                    horarios_exibicao[3],
-                    registro[5],
-                    registro[7],
-                    registro[6]
-                )
-
-                possui_inserido = "manual" in origens
-                tags = ("possui_inserido",) if possui_inserido else ()
-
-                self.tree_banco.insert(
-                    "",
-                    "end",
-                    values=valores,
-                    tags=tags
-                )
-
-            self.atualizar_resumo_mes()
-
-        except Exception as erro:
-            messagebox.showerror(
-                "Banco de Horas",
-                f"Não foi possível carregar as marcações: {erro}"
-            )
-
-    def limpar_indicador_origem(self, valor):
-        """Remove os prefixos visuais R e I antes da edição."""
-
-        if valor is None:
-            return ""
-
-        texto = str(valor).strip()
-
-        if texto in ("", "-", "None", "--:--"):
-            return ""
-
-        return re.sub(
-            r"^[RI]\s+",
-            "",
-            texto
-        ).strip()
+            if hasattr(database, 'get_banco_horas'):
+                registros = database.get_banco_horas(mes_sel)
+                for r in registros:
+                    dia_str = database.get_dia_semana(r[0])
+                    valores = (r[0], dia_str, r[1], r[2], r[3], r[4], r[5], r[7], r[6])
+                    tag = ("manual",) if len(r) > 6 and r[6] == 1 else ()
+                    self.tree_banco.insert("", "end", values=valores, tags=tag)
+                self.atualizar_resumo_mes()
+        except Exception as e:
+            pass
 
     def carregar_edicao_banco(self, event=None):
         selected = self.tree_banco.selection()
-
-        if not selected:
-            return
-
-        item_values = self.tree_banco.item(
-            selected[0],
-            "values"
-        )
-
-        self.ent_banco_data.config(state=tk.NORMAL)
-        self.ent_banco_data.delete(0, tk.END)
-        self.ent_banco_data.insert(0, item_values[0])
-        self.ent_banco_data.config(state="readonly")
-
-        self.banco_m1_var.set(
-            self.limpar_indicador_origem(item_values[2])
-        )
-        self.banco_m2_var.set(
-            self.limpar_indicador_origem(item_values[3])
-        )
-        self.banco_m3_var.set(
-            self.limpar_indicador_origem(item_values[4])
-        )
-        self.banco_m4_var.set(
-            self.limpar_indicador_origem(item_values[5])
-        )
-
-        self.ent_banco_justificativa.delete(0, tk.END)
-
-        if len(item_values) > 7 and item_values[7] != "None":
-            self.ent_banco_justificativa.insert(
-                0,
-                item_values[7]
-            )
-
-        self.btn_cancelar_banco.pack(
-            side=tk.LEFT,
-            padx=10
-        )
-        self.btn_restaurar_banco.pack(
-            side=tk.LEFT,
-            padx=10
-        )
+        if selected:
+            item_values = self.tree_banco.item(selected[0], 'values')
+            
+            self.ent_banco_data.config(state=tk.NORMAL)
+            self.ent_banco_data.delete(0, tk.END)
+            self.ent_banco_data.insert(0, item_values[0])
+            self.ent_banco_data.config(state="readonly")
+            
+            self.banco_m1_var.set(item_values[2] if item_values[2] not in ["None", "-"] else "")
+            self.banco_m2_var.set(item_values[3] if item_values[3] not in ["None", "-"] else "")
+            self.banco_m3_var.set(item_values[4] if item_values[4] not in ["None", "-"] else "")
+            self.banco_m4_var.set(item_values[5] if item_values[5] not in ["None", "-"] else "")
+            
+            self.ent_banco_justificativa.delete(0, tk.END)
+            if len(item_values) > 7 and item_values[7] != "None":
+                self.ent_banco_justificativa.insert(0, item_values[7])
+            
+            self.btn_cancelar_banco.pack(side=tk.LEFT, padx=10)
+            self.btn_restaurar_banco.pack(side=tk.LEFT, padx=10)
 
     def cancelar_edicao_banco(self):
         self.ent_banco_data.config(state=tk.NORMAL)

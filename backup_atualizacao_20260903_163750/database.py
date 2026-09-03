@@ -361,53 +361,15 @@ def calcular_saldo_dia(data, m1, m2, m3, m4, justificativa=""):
                 return ""
 
 def get_banco_horas(mes_ano):
-    """
-    Retorna os valores atuais e as marcações originais do período.
-
-    Índices:
-        0 data
-        1 m1
-        2 m2
-        3 m3
-        4 m4
-        5 saldo
-        6 manual
-        7 justificativa
-        8 orig_m1
-        9 orig_m2
-        10 orig_m3
-        11 orig_m4
-    """
-
     init_db()
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-
-    cursor.execute(
-        """
-        SELECT
-            data,
-            m1,
-            m2,
-            m3,
-            m4,
-            saldo,
-            manual,
-            justificativa,
-            orig_m1,
-            orig_m2,
-            orig_m3,
-            orig_m4
-        FROM banco_horas
+    cursor.execute('''
+        SELECT data, m1, m2, m3, m4, saldo, manual, justificativa 
+        FROM banco_horas 
         WHERE data LIKE ?
-        ORDER BY
-            substr(data, 7, 4) ||
-            substr(data, 4, 2) ||
-            substr(data, 1, 2) ASC
-        """,
-        (f"%/{mes_ano}",)
-    )
-
+        ORDER BY substr(data, 7, 4) || substr(data, 4, 2) || substr(data, 1, 2) ASC
+    ''', (f"%/{mes_ano}",))
     rows = cursor.fetchall()
     conn.close()
     return rows
