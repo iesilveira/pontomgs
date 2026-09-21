@@ -66,6 +66,7 @@ TEXT_BTN_CANCELAR_EDICAO = "Cancelar"
 # --- TEXTOS DO MENU DA BANDEJA (TRAY - RELÓGIO DO WINDOWS) ---
 TEXT_TRAY_ABRIR = "Abrir/Ocultar"
 TEXT_TRAY_ATUALIZAR = "Atualizar marcações"
+TEXT_TRAY_ESQUECIMENTO = "Esquecimento de marcação"
 TEXT_TRAY_CONFIG = "Configurações"
 TEXT_TRAY_LEMBRETES = "Lembretes"
 TEXT_TRAY_BANCO = "Banco de Horas"
@@ -162,6 +163,7 @@ class PontoApp:
         self.atualizar_event = threading.Event()
         self.lembretes_exibidos = set()
         self.data_controle_lembretes = datetime.date.today()
+        self.esquecimento_retorno_data = None
         
         self.setup_ui()
         
@@ -356,6 +358,7 @@ class PontoApp:
         
         self.text_marcacoes.tag_configure("verde", foreground="#28a745")
         self.text_marcacoes.tag_configure("cinza", foreground="#999999")
+        self.text_marcacoes.tag_configure("vermelho", foreground=settings.COLOR_BUTTON_RED)
         self.text_marcacoes.tag_configure("padrao", foreground=settings.COLOR_TEXT_BLUE)
         self.text_marcacoes.tag_configure("leve", font=FONT_BUSCANDO, foreground=settings.COLOR_TEXT_BLUE, justify="center")
         self.text_marcacoes.tag_configure("center", justify='center')
@@ -613,10 +616,17 @@ class PontoApp:
                         )
 
                     elif m2:
+                        horario_retorno_previsto = add_h(m2, 1)
+                        tag_retorno_previsto = (
+                            "vermelho"
+                            if self.esquecimento_marcacao_ativo()
+                            else "cinza"
+                        )
+
                         self.text_marcacoes.insert(
                             tk.END,
-                            add_h(m2, 1),
-                            "cinza"
+                            horario_retorno_previsto,
+                            tag_retorno_previsto
                         )
 
                     elif m1 and m1 <= saida_almoco_padrao:
@@ -676,31 +686,154 @@ class PontoApp:
             self.update_window_size_and_position()
 
     def formatar_tempo_generico(self, string_var, entry_widget):
-        texto = string_var.get()
-        numeros = ''.join(filter(str.isdigit, texto))
-        
-        if not numeros:
-            if texto != "":
-                string_var.set("")
-            return
-            
-        try:
-            numeros = str(int(numeros))
-        except:
-            pass
-            
-        numeros = numeros[-4:]
-        padded = numeros.zfill(4)
-        formatado = f"{padded[:2]}:{padded[2:]}"
-        
-        if string_var.get() != formatado:
-            string_var.set(formatado)
-            if entry_widget:
-                entry_widget.icursor(tk.END)
+        """
+        Mantém o valor no formato HH:MM sem deslocar o cursor durante
+        a digitação. A atualização do cursor ocorre somente após o Tk
+        concluir o processamento do evento atual.
+        """
 
-    # =========================================================================
-    # TELAS DE CONFIGURAÇÕES (GERAL E LEMBRETES)
-    # =========================================================================
+        if getattr(string_var, "_formatando_horario", False):
+            return
+
+        texto = string_var.get()
+        digitos = "".join(
+            caractere
+            for caractere in texto
+            if caractere.isdigit()
+        )[-4:]
+
+        if not digitos:
+            formatado = ""
+        else:
+            digitos = digitos.zfill(4)
+            formatado = f"{digitos[:2]}:{digitos[2:]}"
+
+        if texto != formatado:
+            try:
+                string_var._formatando_horario = True
+                string_var.set(formatado)
+            finally:
+                string_var._formatando_horario = False
+
+        if entry_widget:
+            try:
+                entry_widget.after_idle(
+                    lambda widget=entry_widget: (
+                        widget.icursor(tk.END)
+                        if widget.winfo_exists()
+                        else None
+                    )
+                )
+            except tk.TclError:
+                pass
+
+    def digitar_horario_direita_esquerda(
+        self,
+        event,
+        string_var,
+        entry_widget
+    ):
+        """
+        Implementa entrada no estilo calculadora:
+
+            1 -> 00:01
+            2 -> 00:12
+            3 -> 01:23
+            4 -> 12:34
+
+        Backspace remove o último dígito e desloca os demais para a direita.
+        """
+
+        # Mantém atalhos como Ctrl+C, Ctrl+V, Ctrl+X e Ctrl+A.
+        if event.state & 0x4:
+            entry_widget.after_idle(
+                lambda: self.formatar_tempo_generico(
+                    string_var,
+                    entry_widget
+                )
+            )
+            return None
+
+        if event.char and event.char.isdigit():
+            atuais = "".join(
+                caractere
+                for caractere in string_var.get()
+                if caractere.isdigit()
+            ).zfill(4)[-4:]
+
+            novos = (atuais + event.char)[-4:]
+            string_var.set(
+                f"{novos[:2]}:{novos[2:]}"
+            )
+            entry_widget.after_idle(
+                lambda: entry_widget.icursor(tk.END)
+            )
+            return "break"
+
+        if event.keysym in ("BackSpace", "Delete"):
+            atuais = "".join(
+                caractere
+                for caractere in string_var.get()
+                if caractere.isdigit()
+            ).zfill(4)[-4:]
+
+            novos = ("0" + atuais[:-1])[-4:]
+            string_var.set(
+                f"{novos[:2]}:{novos[2:]}"
+            )
+            entry_widget.after_idle(
+                lambda: entry_widget.icursor(tk.END)
+            )
+            return "break"
+
+        if event.keysym in (
+            "Tab",
+            "ISO_Left_Tab",
+            "Return",
+            "KP_Enter",
+            "Escape",
+            "Left",
+            "Right",
+            "Home",
+            "End"
+        ):
+            return None
+
+        if event.char:
+            return "break"
+
+        return None
+
+    def configurar_campo_horario(
+        self,
+        entry_widget,
+        string_var
+    ):
+        """Configura um campo para digitação de horário da direita para a esquerda."""
+
+        entry_widget.bind(
+            "<KeyPress>",
+            lambda event: self.digitar_horario_direita_esquerda(
+                event,
+                string_var,
+                entry_widget
+            )
+        )
+
+        entry_widget.bind(
+            "<Button-1>",
+            lambda event: entry_widget.after_idle(
+                lambda: entry_widget.icursor(tk.END)
+            )
+        )
+
+        entry_widget.bind(
+            "<FocusIn>",
+            lambda event: entry_widget.after_idle(
+                lambda: entry_widget.icursor(tk.END)
+            )
+        )
+
     def show_config_window(self):
         if (
             hasattr(self, 'win_config')
@@ -816,6 +949,8 @@ class PontoApp:
             pady=5,
             anchor="center"
         )
+
+        self.configurar_campo_horario(self.ent_almoco, self.almoco_var)
 
         self.ent_almoco.bind(
             "<Button-1>",
@@ -957,6 +1092,7 @@ class PontoApp:
         self.tempo_lembrete_var.trace_add("write", lambda *args: self.formatar_tempo_generico(self.tempo_lembrete_var, self.ent_tempo_lembrete))
         self.ent_tempo_lembrete = tk.Entry(form_frame, textvariable=self.tempo_lembrete_var, font=FONT_INPUTS, width=15, justify="center", relief="solid", bd=1)
         self.ent_tempo_lembrete.grid(row=2, column=1, sticky="w", pady=2)
+        self.configurar_campo_horario(self.ent_tempo_lembrete, self.tempo_lembrete_var)
         self.ent_tempo_lembrete.bind("<Button-1>", lambda e: self.ent_tempo_lembrete.after(10, lambda: self.ent_tempo_lembrete.icursor(tk.END)))
         self.ent_tempo_lembrete.bind("<FocusIn>", lambda e: self.ent_tempo_lembrete.after(10, lambda: self.ent_tempo_lembrete.icursor(tk.END)))
 
@@ -1237,10 +1373,17 @@ class PontoApp:
         self.ent_banco_m4 = tk.Entry(form_frame, textvariable=self.banco_m4_var, font=FONT_INPUTS, width=8, relief="solid", bd=1, justify="center")
         self.ent_banco_m4.grid(row=0, column=9, pady=2, padx=2)
 
-        # Forçar digitação limpa no final do campo para Inputs de tempo
-        for ent in [self.ent_banco_m1, self.ent_banco_m2, self.ent_banco_m3, self.ent_banco_m4]:
-            ent.bind("<Button-1>", lambda e, widget=ent: widget.after(10, lambda: widget.icursor(tk.END)))
-            ent.bind("<FocusIn>", lambda e, widget=ent: widget.after(10, lambda: widget.icursor(tk.END)))
+        # CAMPOS_HORARIO_BANCO_V4
+        for entry_widget, string_var in (
+            (self.ent_banco_m1, self.banco_m1_var),
+            (self.ent_banco_m2, self.banco_m2_var),
+            (self.ent_banco_m3, self.banco_m3_var),
+            (self.ent_banco_m4, self.banco_m4_var)
+        ):
+            self.configurar_campo_horario(
+                entry_widget,
+                string_var
+            )
 
         tk.Label(form_frame, text="Justificativa:", bg=settings.COLOR_BG, font=FONT_INPUTS).grid(row=1, column=0, pady=4, padx=(5,2), sticky="e")
         self.ent_banco_justificativa = tk.Entry(form_frame, font=FONT_INPUTS, width=65, relief="solid", bd=1)
@@ -1860,6 +2003,78 @@ class PontoApp:
     # =========================================================================
     # MOTOR DE LAÇO DO RELÓGIO E EVENTOS DINÂMICOS
     # =========================================================================
+    def esquecimento_marcacao_ativo(self):
+        """
+        Informa se a previsão visual do retorno deve ser tratada como
+        uma marcação esquecida no dia corrente.
+
+        O estado não é persistido e não altera self.marca3 nem o banco.
+        """
+
+        hoje = datetime.date.today()
+
+        if self.esquecimento_retorno_data != hoje:
+            self.esquecimento_retorno_data = None
+            return False
+
+        if self.marca3 or self.marca4 or not self.marca2:
+            self.esquecimento_retorno_data = None
+            return False
+
+        return True
+
+    def ativar_esquecimento_marcacao(self):
+        """
+        Ativa somente na telinha, e apenas hoje, a previsão vermelha
+        da terceira marcação, uma hora após a segunda marcação.
+        """
+
+        if not self.marca2:
+            messagebox.showwarning(
+                "Esquecimento de marcação",
+                "Não existe uma marcação de saída para o almoço hoje."
+            )
+            return
+
+        if self.marca3:
+            messagebox.showinfo(
+                "Esquecimento de marcação",
+                "A marcação de retorno do almoço já foi registrada."
+            )
+            return
+
+        if self.marca4:
+            messagebox.showinfo(
+                "Esquecimento de marcação",
+                "O dia já possui uma marcação de saída."
+            )
+            return
+
+        self.esquecimento_retorno_data = datetime.date.today()
+
+        marcacoes_atuais = [
+            horario
+            for horario in (
+                self.marca1,
+                self.marca2,
+                self.marca3,
+                self.marca4
+            )
+            if horario
+        ]
+
+        self.atualizar_interface_marcacoes(
+            " ".join(marcacoes_atuais)
+        )
+
+        self.show_main_window()
+
+    def tray_esquecimento_marcacao(self, icon, item):
+        self.root.after(
+            0,
+            self.ativar_esquecimento_marcacao
+        )
+
     def update_clock_loop(self):
         while True:
             agora = datetime.datetime.now()
@@ -1998,7 +2213,11 @@ class PontoApp:
                         cor_tempo = settings.COLOR_GREEN
                     mostrar_tempo = True
                     
-                    if self.marca2 and not self.marca3:
+                    if (
+                        self.marca2
+                        and not self.marca3
+                        and not self.esquecimento_marcacao_ativo()
+                    ):
                         h2, m2 = map(int, self.marca2.split(":"))
                         m2_dt = datetime.datetime(agora.year, agora.month, agora.day, h2, m2, 0)
                         
@@ -2211,6 +2430,7 @@ class PontoApp:
                         self.marca2
                         and not self.marca3
                         and not self.marca4
+                        and not self.esquecimento_marcacao_ativo()
                     )
 
                     if not em_almoco:
@@ -2250,6 +2470,7 @@ class PontoApp:
         menu = pystray.Menu(
             pystray.MenuItem(TEXT_TRAY_ABRIR, self.tray_toggle_app, default=True),
             pystray.MenuItem(TEXT_TRAY_ATUALIZAR, self.tray_force_update),
+            pystray.MenuItem(TEXT_TRAY_ESQUECIMENTO, self.tray_esquecimento_marcacao),
             pystray.MenuItem(TEXT_TRAY_CONFIG, self.tray_show_config),
             pystray.MenuItem(TEXT_TRAY_LEMBRETES, self.tray_show_lembretes),
             pystray.MenuItem(TEXT_TRAY_BANCO, self.tray_show_banco_horas),
