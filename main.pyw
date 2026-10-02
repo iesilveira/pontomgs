@@ -323,9 +323,6 @@ class PontoApp:
         self.frame_topo = tk.Frame(self.master_frame, bg=settings.COLOR_BG)
         self.frame_topo.pack(side=tk.TOP, fill=tk.X, pady=(15, 0))
         
-        self.btn_config = tk.Label(self.frame_topo, text=TEXT_BTN_CONFIG, font=FONT_ICONS, bg=settings.COLOR_BG, fg="#888888", cursor="hand2")
-        self.btn_config.pack(side=tk.LEFT, padx=15)
-        self.btn_config.bind("<Button-1>", lambda e: self.show_config_window())
         
         self.btn_close = tk.Label(self.frame_topo, text=TEXT_BTN_MINIMIZE, font=FONT_MINIMIZE, bg=settings.COLOR_BG, fg="#888888", cursor="hand2")
         self.btn_close.pack(side=tk.RIGHT, padx=(5, 15))
@@ -407,6 +404,72 @@ class PontoApp:
     # =========================================================================
     # ATUALIZAÇÃO DO DISPLAY DE MARCAÇÕES (TEXTO VERDE E CINZA)
     # =========================================================================
+    def calcular_horario_previsto_saida(
+        self,
+        marca_entrada=None,
+        marca_saida_almoco=None,
+        marca_retorno_almoco=None
+    ):
+        """
+        Calcula a previsão da quarta marcação.
+
+        Jornada-base: entrada + 9 horas.
+        Se o almoço ultrapassar uma hora, somente o excedente é somado.
+        Um almoço inferior a uma hora nunca antecipa a saída.
+        """
+        entrada = (
+            marca_entrada
+            if marca_entrada is not None
+            else self.marca1
+        )
+        saida_almoco = (
+            marca_saida_almoco
+            if marca_saida_almoco is not None
+            else self.marca2
+        )
+        retorno_almoco = (
+            marca_retorno_almoco
+            if marca_retorno_almoco is not None
+            else self.marca3
+        )
+
+        if not entrada:
+            return None
+
+        try:
+            entrada_dt = datetime.datetime.strptime(
+                entrada,
+                "%H:%M"
+            )
+            previsao = entrada_dt + datetime.timedelta(hours=9)
+
+            if saida_almoco and retorno_almoco:
+                saida_dt = datetime.datetime.strptime(
+                    saida_almoco,
+                    "%H:%M"
+                )
+                retorno_dt = datetime.datetime.strptime(
+                    retorno_almoco,
+                    "%H:%M"
+                )
+
+                if retorno_dt < saida_dt:
+                    retorno_dt += datetime.timedelta(days=1)
+
+                excesso = (
+                    retorno_dt
+                    - saida_dt
+                    - datetime.timedelta(hours=1)
+                )
+
+                if excesso.total_seconds() > 0:
+                    previsao += excesso
+
+            return previsao.strftime("%H:%M")
+
+        except (TypeError, ValueError):
+            return None
+
     def atualizar_interface_marcacoes(self, texto):
         self.text_marcacoes.config(
             state=tk.NORMAL
@@ -661,7 +724,7 @@ class PontoApp:
                     elif m1:
                         self.text_marcacoes.insert(
                             tk.END,
-                            add_h(m1, 9),
+                            self.calcular_horario_previsto_saida(m1, m2, m3) or '--:--',
                             "cinza"
                         )
 
@@ -1941,32 +2004,95 @@ class PontoApp:
                 messagebox.showerror("Erro", f"Ocorreu um erro na restauração: {e}")
 
     def sincronizar_banco(self):
+        mes_selecionado = (
+            self.mes_selecionado_var.get().strip()
+        )
+
+        if not re.fullmatch(r"\d{2}/\d{4}", mes_selecionado):
+            messagebox.showwarning(
+                "Banco de Horas",
+                "Selecione um mês válido antes de atualizar as marcações."
+            )
+            return
+
+        matricula = self.config.get("matricula", "").strip()
+        senha = self.config.get("senha", "")
+
+        if not matricula or not senha:
+            messagebox.showwarning(
+                "Configuração necessária",
+                "Configure a matrícula e a senha antes de atualizar."
+            )
+            return
+
         self.btn_atualizar_banco.config(state=tk.DISABLED)
         self.btn_limpar_banco.config(state=tk.DISABLED)
         self.progress_banco.pack(side=tk.LEFT, padx=10)
         self.progress_banco.start(15)
-        
+
         def run_sync():
             try:
-                if hasattr(scraper, 'sync_mes_scraper') and self.config.get("matricula"):
-                    scraper.sync_mes_scraper(self.config["matricula"], self.config["senha"])
-                    
-                    novos_meses = database.get_meses_disponiveis()
-                    self.root.after(0, lambda: self.cb_mes.config(values=novos_meses))
-                    self.root.after(0, self.atualizar_lista_banco)
-            except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("Erro", f"Falha na sincronização: {e}"))
+                mes_atual = datetime.datetime.now().strftime(
+                    "%m/%Y"
+                )
+
+                # A coleta do mês atual permanece inalterada e rápida.
+                if mes_selecionado == mes_atual:
+                    sucesso = scraper.sync_mes_scraper(
+                        matricula,
+                        senha
+                    )
+                else:
+                    sucesso = scraper.sync_mes_anterior_scraper(
+                        matricula,
+                        senha,
+                        mes_selecionado
+                    )
+
+                if not sucesso:
+                    raise RuntimeError(
+                        "O Ponto WEB não retornou marcações para "
+                        f"o período {mes_selecionado}."
+                    )
+
+                novos_meses = database.get_meses_disponiveis()
+
+                def concluir_sucesso():
+                    self.cb_mes.config(values=novos_meses)
+                    self.mes_selecionado_var.set(mes_selecionado)
+                    self.atualizar_lista_banco()
+
+                self.root.after(0, concluir_sucesso)
+
+            except Exception as erro:
+                self.root.after(
+                    0,
+                    lambda mensagem=str(erro): messagebox.showerror(
+                        "Falha na sincronização",
+                        mensagem
+                    )
+                )
             finally:
                 self.root.after(0, self.progress_banco.stop)
                 self.root.after(0, self.progress_banco.pack_forget)
-                self.root.after(0, lambda: self.btn_atualizar_banco.config(state=tk.NORMAL))
-                self.root.after(0, lambda: self.btn_limpar_banco.config(state=tk.NORMAL))
-                
-        threading.Thread(target=run_sync, daemon=True).start()
+                self.root.after(
+                    0,
+                    lambda: self.btn_atualizar_banco.config(
+                        state=tk.NORMAL
+                    )
+                )
+                self.root.after(
+                    0,
+                    lambda: self.btn_limpar_banco.config(
+                        state=tk.NORMAL
+                    )
+                )
 
-    # =========================================================================
-    # SISTEMA DE LEMBRETE E ALARME POP-UP
-    # =========================================================================
+        threading.Thread(
+            target=run_sync,
+            daemon=True
+        ).start()
+
     def mostrar_lembrete(self, nome, mensagem, horario):
         try:
             import winsound
@@ -2104,7 +2230,11 @@ class PontoApp:
             
             if self.marca1:
                 event_times[EVENTO_ENTRADA] = self.marca1
-                event_times[EVENTO_PREV_SAIDA] = calc_prev(self.marca1, 9)
+                event_times[EVENTO_PREV_SAIDA] = self.calcular_horario_previsto_saida(
+                    self.marca1,
+                    self.marca2,
+                    self.marca3
+                )
                 
                 if self.marca2:
                     event_times[EVENTO_INICIO_ALMOCO] = self.marca2
@@ -2193,9 +2323,17 @@ class PontoApp:
                     pass
             elif self.marca1:
                 try:
-                    h_in, m_in = map(int, self.marca1.split(":"))
-                    entrada_dt = datetime.datetime(agora.year, agora.month, agora.day, h_in, m_in, 0)
-                    saida_dt = entrada_dt + datetime.timedelta(hours=9)
+                    saida_prevista = self.calcular_horario_previsto_saida(
+                        self.marca1,
+                        self.marca2,
+                        self.marca3
+                    )
+                    if not saida_prevista:
+                        raise ValueError('Não foi possível calcular a saída prevista.')
+                    h_saida, m_saida = map(int, saida_prevista.split(":"))
+                    saida_dt = datetime.datetime(
+                        agora.year, agora.month, agora.day, h_saida, m_saida, 0
+                    )
                     
                     diff = saida_dt - agora 
                     total_segundos = int(diff.total_seconds())

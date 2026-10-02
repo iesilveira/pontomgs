@@ -582,3 +582,89 @@ def delete_mes_banco(mes_ano):
     cursor.execute('DELETE FROM banco_horas WHERE data LIKE ?', (f"%/{mes_ano}",))
     conn.commit()
     conn.close()
+
+# -----------------------------------------------------------------------------
+# Importação histórica de Relatórios de Ponto
+# -----------------------------------------------------------------------------
+def garantir_dias_mes_banco(mes_ano):
+    import calendar
+    import datetime as _datetime
+
+    try:
+        mes, ano = [int(item) for item in str(mes_ano).split("/")]
+    except (TypeError, ValueError):
+        raise ValueError("Período inválido: use MM/AAAA.")
+
+    init_db()
+    ultimo_dia = calendar.monthrange(ano, mes)[1]
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    for dia in range(1, ultimo_dia + 1):
+        data = _datetime.date(ano, mes, dia).strftime("%d/%m/%Y")
+        cursor.execute("SELECT data FROM banco_horas WHERE data = ?", (data,))
+        if cursor.fetchone() is None:
+            cursor.execute(
+                """
+                INSERT INTO banco_horas (
+                    data, m1, m2, m3, m4, saldo, manual, justificativa
+                ) VALUES (?, '', '', '', '', '', 0, '')
+                """,
+                (data,)
+            )
+
+    conn.commit()
+    conn.close()
+
+
+def importar_marcacoes_relatorio(data, marcacoes):
+    """Importa horários do Relatório de Ponto sem apagar ajustes manuais."""
+    init_db()
+    valores = list(marcacoes or [])[:4]
+    valores += [""] * (4 - len(valores))
+    m1, m2, m3, m4 = valores
+
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT manual, m1, m2, m3, m4
+        FROM banco_horas WHERE data = ?
+        """,
+        (data,)
+    )
+    existente = cursor.fetchone()
+
+    if existente is None:
+        cursor.execute(
+            """
+            INSERT INTO banco_horas (
+                data, m1, m2, m3, m4, saldo, manual, justificativa,
+                orig_m1, orig_m2, orig_m3, orig_m4
+            ) VALUES (?, ?, ?, ?, ?, '', 0, '', ?, ?, ?, ?)
+            """,
+            (data, m1, m2, m3, m4, m1, m2, m3, m4),
+        )
+    else:
+        manual = bool(existente[0])
+        cursor.execute(
+            """
+            UPDATE banco_horas
+            SET orig_m1 = ?, orig_m2 = ?, orig_m3 = ?, orig_m4 = ?
+            WHERE data = ?
+            """,
+            (m1, m2, m3, m4, data),
+        )
+        if not manual:
+            cursor.execute(
+                """
+                UPDATE banco_horas
+                SET m1 = ?, m2 = ?, m3 = ?, m4 = ?
+                WHERE data = ?
+                """,
+                (m1, m2, m3, m4, data),
+            )
+
+    conn.commit()
+    conn.close()
+
