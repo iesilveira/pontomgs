@@ -1309,6 +1309,13 @@ class PontoApp:
         if hasattr(self, 'win_banco') and self.win_banco and self.win_banco.winfo_exists():
             self.win_banco.lift()
             self.win_banco.focus_force()
+            try:
+                self.btn_atualizar_banco.config(command=self.sincronizar_banco, state=tk.NORMAL)
+                self.btn_limpar_banco.config(state=tk.NORMAL)
+                self.progress_banco.stop()
+                self.progress_banco.pack_forget()
+            except Exception:
+                pass
             return
             
         self.win_banco = tk.Toplevel(self.root)
@@ -1331,6 +1338,7 @@ class PontoApp:
         self.btn_atualizar_banco = tk.Button(top_frame, text=TEXT_BTN_ATUALIZAR_BANCO, bg="#007bff", fg="white", font=FONT_BTN_SALVAR_CONF, 
                                              relief="flat", command=self.sincronizar_banco)
         self.btn_atualizar_banco.pack(side=tk.LEFT, padx=(0, 10))
+        self.btn_atualizar_banco.config(command=self.sincronizar_banco, state=tk.NORMAL)
         
         self.btn_limpar_banco = tk.Button(top_frame, text=TEXT_BTN_LIMPAR_MES, bg=settings.COLOR_BUTTON_RED, fg="white", font=FONT_BTN_SALVAR_CONF, 
                                           relief="flat", command=self.limpar_mes_banco)
@@ -2004,94 +2012,127 @@ class PontoApp:
                 messagebox.showerror("Erro", f"Ocorreu um erro na restauração: {e}")
 
     def sincronizar_banco(self):
-        mes_selecionado = (
-            self.mes_selecionado_var.get().strip()
-        )
-
-        if not re.fullmatch(r"\d{2}/\d{4}", mes_selecionado):
+        mes_selecionado = self.mes_selecionado_var.get().strip()
+        partes = mes_selecionado.split("/")
+        if (
+            len(partes) != 2
+            or len(partes[0]) != 2
+            or len(partes[1]) != 4
+            or not all(parte.isdigit() for parte in partes)
+            or not 1 <= int(partes[0]) <= 12
+        ):
             messagebox.showwarning(
                 "Banco de Horas",
-                "Selecione um mês válido antes de atualizar as marcações."
+                "Selecione um mês válido antes de atualizar as marcações.",
+                parent=self.win_banco
             )
             return
 
         matricula = self.config.get("matricula", "").strip()
         senha = self.config.get("senha", "")
-
         if not matricula or not senha:
             messagebox.showwarning(
                 "Configuração necessária",
-                "Configure a matrícula e a senha antes de atualizar."
+                "Configure a matrícula e a senha antes de atualizar.",
+                parent=self.win_banco
             )
             return
 
-        self.btn_atualizar_banco.config(state=tk.DISABLED)
-        self.btn_limpar_banco.config(state=tk.DISABLED)
-        self.progress_banco.pack(side=tk.LEFT, padx=10)
-        self.progress_banco.start(15)
+        try:
+            self.btn_atualizar_banco.config(state=tk.DISABLED)
+            self.btn_limpar_banco.config(state=tk.DISABLED)
+            self.progress_banco.pack(side=tk.LEFT, padx=10)
+            self.progress_banco.start(15)
+        except Exception:
+            pass
 
         def run_sync():
             try:
-                mes_atual = datetime.datetime.now().strftime(
-                    "%m/%Y"
-                )
-
-                # A coleta do mês atual permanece inalterada e rápida.
+                mes_atual = datetime.datetime.now().strftime("%m/%Y")
                 if mes_selecionado == mes_atual:
-                    sucesso = scraper.sync_mes_scraper(
-                        matricula,
-                        senha
-                    )
+                    # Mantém inalterada a rotina rápida do mês corrente.
+                    resultado = scraper.sync_mes_scraper(matricula, senha)
                 else:
-                    sucesso = scraper.sync_mes_anterior_scraper(
+                    funcao_historica = getattr(
+                        scraper,
+                        "sync_mes_anterior_scraper",
+                        None
+                    )
+                    if not callable(funcao_historica):
+                        raise RuntimeError(
+                            "A rotina de importação de meses anteriores não está disponível."
+                        )
+                    resultado = funcao_historica(
                         matricula,
                         senha,
                         mes_selecionado
                     )
 
+                if isinstance(resultado, tuple):
+                    sucesso = bool(resultado[0]) if resultado else False
+                    detalhe = str(resultado[1]) if len(resultado) > 1 else ""
+                else:
+                    sucesso = bool(resultado)
+                    detalhe = ""
+
                 if not sucesso:
                     raise RuntimeError(
-                        "O Ponto WEB não retornou marcações para "
-                        f"o período {mes_selecionado}."
+                        detalhe or "A sincronização não confirmou a importação."
                     )
 
-                novos_meses = database.get_meses_disponiveis()
+                meses = database.get_meses_disponiveis()
 
-                def concluir_sucesso():
-                    self.cb_mes.config(values=novos_meses)
-                    self.mes_selecionado_var.set(mes_selecionado)
-                    self.atualizar_lista_banco()
+                def concluir():
+                    try:
+                        self.cb_mes.config(values=meses)
+                        self.mes_selecionado_var.set(mes_selecionado)
+                        self.atualizar_lista_banco()
+                    finally:
+                        restaurar_interface()
 
-                self.root.after(0, concluir_sucesso)
+                self.root.after(0, concluir)
 
             except Exception as erro:
-                self.root.after(
-                    0,
-                    lambda mensagem=str(erro): messagebox.showerror(
-                        "Falha na sincronização",
-                        mensagem
-                    )
-                )
-            finally:
-                self.root.after(0, self.progress_banco.stop)
-                self.root.after(0, self.progress_banco.pack_forget)
-                self.root.after(
-                    0,
-                    lambda: self.btn_atualizar_banco.config(
-                        state=tk.NORMAL
-                    )
-                )
-                self.root.after(
-                    0,
-                    lambda: self.btn_limpar_banco.config(
-                        state=tk.NORMAL
-                    )
-                )
+                mensagem = str(erro)
 
-        threading.Thread(
-            target=run_sync,
-            daemon=True
-        ).start()
+                def mostrar_erro():
+                    try:
+                        messagebox.showerror(
+                            "Falha na sincronização",
+                            "Não foi possível atualizar as marcações de "
+                            + mes_selecionado
+                            + ":\n\n"
+                            + mensagem,
+                            parent=self.win_banco
+                        )
+                    finally:
+                        restaurar_interface()
+
+                self.root.after(0, mostrar_erro)
+
+        def restaurar_interface():
+            try:
+                self.progress_banco.stop()
+                self.progress_banco.pack_forget()
+                self.btn_atualizar_banco.config(state=tk.NORMAL)
+                self.btn_limpar_banco.config(state=tk.NORMAL)
+            except Exception:
+                pass
+
+        import threading
+        try:
+            threading.Thread(
+                target=run_sync,
+                daemon=True,
+                name="SincronizacaoBancoHoras"
+            ).start()
+        except Exception as erro:
+            restaurar_interface()
+            messagebox.showerror(
+                "Falha na sincronização",
+                "Não foi possível iniciar a atualização: " + str(erro),
+                parent=self.win_banco
+            )
 
     def mostrar_lembrete(self, nome, mensagem, horario):
         try:

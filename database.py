@@ -290,18 +290,77 @@ def get_dia_semana(data_str):
         return ""
 
 def get_meses_disponiveis():
+    """Retorna os meses do Banco de Horas em ordem decrescente.
+
+    Mantém períodos limpos disponíveis e inclui todos os meses entre
+    o primeiro período conhecido e o mês corrente.
+    """
     init_db()
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute('SELECT DISTINCT substr(data, 4, 7) FROM banco_horas ORDER BY substr(data, 7, 4) DESC, substr(data, 4, 2) DESC')
-    rows = cursor.fetchall()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS banco_horas_periodos (
+            mes_ano TEXT PRIMARY KEY
+        )
+    """)
+
+    # Registra os períodos que ainda existem na tabela principal.
+    cursor.execute("SELECT DISTINCT data FROM banco_horas WHERE data IS NOT NULL")
+    datas = cursor.fetchall()
+    periodos = set()
+    for (data_texto,) in datas:
+        try:
+            data_obj = datetime.datetime.strptime(str(data_texto), "%d/%m/%Y")
+            periodo = data_obj.strftime("%m/%Y")
+            periodos.add(periodo)
+            cursor.execute(
+                "INSERT OR IGNORE INTO banco_horas_periodos (mes_ano) VALUES (?)",
+                (periodo,)
+            )
+        except (TypeError, ValueError):
+            continue
+
+    cursor.execute("SELECT mes_ano FROM banco_horas_periodos")
+    for (periodo,) in cursor.fetchall():
+        try:
+            datetime.datetime.strptime(periodo, "%m/%Y")
+            periodos.add(periodo)
+        except (TypeError, ValueError):
+            continue
+
+    agora = datetime.datetime.now()
+    periodo_atual = (agora.year, agora.month)
+    chaves = []
+    for periodo in periodos:
+        try:
+            dt = datetime.datetime.strptime(periodo, "%m/%Y")
+            chaves.append((dt.year, dt.month))
+        except (TypeError, ValueError):
+            pass
+
+    if chaves:
+        primeiro = min(chaves)
+        ano, mes = primeiro
+        while (ano, mes) <= periodo_atual:
+            periodos.add(f"{mes:02d}/{ano:04d}")
+            mes += 1
+            if mes > 12:
+                mes = 1
+                ano += 1
+    else:
+        periodos.add(agora.strftime("%m/%Y"))
+
+    conn.commit()
     conn.close()
-    
-    meses = [row[0] for row in rows if row[0]]
-    hoje_str = datetime.datetime.now().strftime("%m/%Y")
-    if hoje_str not in meses:
-        meses.insert(0, hoje_str)
-    return meses
+
+    def chave_periodo(texto):
+        try:
+            dt = datetime.datetime.strptime(texto, "%m/%Y")
+            return (dt.year, dt.month)
+        except (TypeError, ValueError):
+            return (0, 0)
+
+    return sorted(periodos, key=chave_periodo, reverse=True)
 
 def calcular_saldo_dia(data, m1, m2, m3, m4, justificativa=""):
     def to_minutes(t_str):
@@ -575,24 +634,136 @@ def get_saldo_mes(mes_ano):
     h, m = divmod(abs(total_mins), 60)
     return f"{sinal_str}{h:02d}:{m:02d}", total_mins
 
-def delete_mes_banco(mes_ano):
+def recalcular_saldos_existentes():
+    """Recalcula os saldos gravados, sem alterar linhas marcadas como manuais."""
     init_db()
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute('DELETE FROM banco_horas WHERE data LIKE ?', (f"%/{mes_ano}",))
+    alterados = 0
+
+    try:
+        cursor.execute(
+            """
+            SELECT data, m1, m2, m3, m4, manual, justificativa, saldo
+            FROM banco_horas
+            """
+        )
+        registros = cursor.fetchall()
+
+        for data, m1, m2, m3, m4, manual, justificativa, saldo_anterior in registros:
+            if bool(manual):
+                continue
+
+            saldo_calculado = calcular_saldo_dia(
+                data, m1, m2, m3, m4, justificativa or ""
+            )
+
+            if saldo_calculado != (saldo_anterior or ""):
+                cursor.execute(
+                    "UPDATE banco_horas SET saldo = ? WHERE data = ?",
+                    (saldo_calculado, data)
+                )
+                alterados += 1
+
+        conn.commit()
+        return alterados
+
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+def delete_mes_banco(mes_ano):
+    """Limpa as marcações de um mês sem apagar seus dias/período.
+
+    O mês permanece no seletor e a tabela continua contendo todos os dias.
+    Em fins de semana, as marcações atuais são apresentadas como "-";
+    nos dias úteis, os campos ficam vazios. As marcações originais são
+    apagadas porque esta operação representa uma limpeza explícita do mês.
+    """
+    init_db()
+
+    texto = str(mes_ano or "").strip()
+    try:
+        partes = texto.split("/")
+        if len(partes) != 2:
+            raise ValueError("Período deve estar no formato MM/AAAA")
+        mes = int(partes[0])
+        ano = int(partes[1])
+        if ano < 100:
+            ano += 2000
+        if mes < 1 or mes > 12:
+            raise ValueError("Mês inválido")
+        primeiro_dia = datetime.date(ano, mes, 1)
+    except (TypeError, ValueError) as erro:
+        raise ValueError(f"Período inválido: {mes_ano!r}") from erro
+
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS banco_horas_periodos (
+            mes_ano TEXT PRIMARY KEY
+        )
+    """)
+
+    periodo_normalizado = f"{mes:02d}/{ano:04d}"
+    cursor.execute(
+        "INSERT OR IGNORE INTO banco_horas_periodos (mes_ano) VALUES (?)",
+        (periodo_normalizado,)
+    )
+
+    data_obj = primeiro_dia
+    while data_obj.month == mes:
+        data_str = data_obj.strftime("%d/%m/%Y")
+        if data_obj.weekday() >= 5:
+            valores = ("-", "-", "-", "-")
+        else:
+            valores = ("", "", "", "")
+
+        cursor.execute(
+            "SELECT 1 FROM banco_horas WHERE data = ?",
+            (data_str,)
+        )
+        existe = cursor.fetchone() is not None
+
+        if existe:
+            cursor.execute("""
+                UPDATE banco_horas
+                SET m1 = ?, m2 = ?, m3 = ?, m4 = ?,
+                    saldo = '', manual = 0, justificativa = '',
+                    orig_m1 = '', orig_m2 = '', orig_m3 = '', orig_m4 = ''
+                WHERE data = ?
+            """, (*valores, data_str))
+        else:
+            cursor.execute("""
+                INSERT INTO banco_horas (
+                    data, m1, m2, m3, m4, saldo, manual, justificativa,
+                    orig_m1, orig_m2, orig_m3, orig_m4
+                ) VALUES (?, ?, ?, ?, ?, '', 0, '', '', '', '', '')
+            """, (data_str, *valores))
+
+        # Também registra o período para sobreviver a futuras limpezas.
+        cursor.execute(
+            "INSERT OR IGNORE INTO banco_horas_periodos (mes_ano) VALUES (?)",
+            (periodo_normalizado,)
+        )
+        data_obj += datetime.timedelta(days=1)
+
     conn.commit()
     conn.close()
 
-# -----------------------------------------------------------------------------
-# Importação histórica de Relatórios de Ponto
-# -----------------------------------------------------------------------------
 def garantir_dias_mes_banco(mes_ano):
+    """Garante todas as datas do mês e calcula os saldos não manuais."""
     import calendar
     import datetime as _datetime
 
     try:
-        mes, ano = [int(item) for item in str(mes_ano).split("/")]
+        mes, ano = [int(item) for item in str(mes_ano).strip().split("/")]
     except (TypeError, ValueError):
+        raise ValueError("Período inválido: use MM/AAAA.")
+
+    if mes < 1 or mes > 12 or ano < 1900:
         raise ValueError("Período inválido: use MM/AAAA.")
 
     init_db()
@@ -600,71 +771,126 @@ def garantir_dias_mes_banco(mes_ano):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
 
-    for dia in range(1, ultimo_dia + 1):
-        data = _datetime.date(ano, mes, dia).strftime("%d/%m/%Y")
-        cursor.execute("SELECT data FROM banco_horas WHERE data = ?", (data,))
-        if cursor.fetchone() is None:
+    try:
+        for dia in range(1, ultimo_dia + 1):
+            data = _datetime.date(ano, mes, dia).strftime("%d/%m/%Y")
             cursor.execute(
-                """
-                INSERT INTO banco_horas (
-                    data, m1, m2, m3, m4, saldo, manual, justificativa
-                ) VALUES (?, '', '', '', '', '', 0, '')
-                """,
+                "SELECT 1 FROM banco_horas WHERE data = ?",
                 (data,)
             )
+            if cursor.fetchone() is None:
+                cursor.execute(
+                    """
+                    INSERT INTO banco_horas (
+                        data, m1, m2, m3, m4, saldo, manual, justificativa
+                    ) VALUES (?, '', '', '', '', '', 0, '')
+                    """,
+                    (data,)
+                )
 
-    conn.commit()
-    conn.close()
+        mes_ano_normalizado = f"{mes:02d}/{ano:04d}"
+        cursor.execute(
+            """
+            SELECT data, m1, m2, m3, m4, manual, justificativa
+            FROM banco_horas
+            WHERE data LIKE ?
+            """,
+            (f"%/{mes_ano_normalizado}",)
+        )
 
+        atualizados = []
+        for data, m1, m2, m3, m4, manual, justificativa in cursor.fetchall():
+            if bool(manual):
+                continue
+            saldo = calcular_saldo_dia(
+                data, m1, m2, m3, m4, justificativa or ""
+            )
+            atualizados.append((saldo, data))
+
+        cursor.executemany(
+            "UPDATE banco_horas SET saldo = ? WHERE data = ?",
+            atualizados
+        )
+        conn.commit()
+
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 def importar_marcacoes_relatorio(data, marcacoes):
-    """Importa horários do Relatório de Ponto sem apagar ajustes manuais."""
+    """Importa as marcações e calcula o saldo sem apagar ajustes manuais."""
     init_db()
+
     valores = list(marcacoes or [])[:4]
     valores += [""] * (4 - len(valores))
     m1, m2, m3, m4 = valores
 
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT manual, m1, m2, m3, m4
-        FROM banco_horas WHERE data = ?
-        """,
-        (data,)
-    )
-    existente = cursor.fetchone()
 
-    if existente is None:
+    try:
         cursor.execute(
             """
-            INSERT INTO banco_horas (
-                data, m1, m2, m3, m4, saldo, manual, justificativa,
-                orig_m1, orig_m2, orig_m3, orig_m4
-            ) VALUES (?, ?, ?, ?, ?, '', 0, '', ?, ?, ?, ?)
-            """,
-            (data, m1, m2, m3, m4, m1, m2, m3, m4),
-        )
-    else:
-        manual = bool(existente[0])
-        cursor.execute(
-            """
-            UPDATE banco_horas
-            SET orig_m1 = ?, orig_m2 = ?, orig_m3 = ?, orig_m4 = ?
+            SELECT manual, justificativa
+            FROM banco_horas
             WHERE data = ?
             """,
-            (m1, m2, m3, m4, data),
+            (data,)
         )
-        if not manual:
+        existente = cursor.fetchone()
+
+        if existente is None:
+            justificativa = ""
+            saldo = calcular_saldo_dia(
+                data, m1, m2, m3, m4, justificativa
+            )
+            cursor.execute(
+                """
+                INSERT INTO banco_horas (
+                    data, m1, m2, m3, m4, saldo, manual, justificativa,
+                    orig_m1, orig_m2, orig_m3, orig_m4
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+                """,
+                (
+                    data, m1, m2, m3, m4, saldo, justificativa,
+                    m1, m2, m3, m4
+                )
+            )
+        else:
+            manual = bool(existente[0])
+            justificativa = existente[1] or ""
+
+            # Sempre atualiza a cópia original recebida do sistema.
             cursor.execute(
                 """
                 UPDATE banco_horas
-                SET m1 = ?, m2 = ?, m3 = ?, m4 = ?
+                SET orig_m1 = ?, orig_m2 = ?, orig_m3 = ?, orig_m4 = ?
                 WHERE data = ?
                 """,
-                (m1, m2, m3, m4, data),
+                (m1, m2, m3, m4, data)
             )
 
-    conn.commit()
-    conn.close()
+            # Uma linha manual mantém os horários e saldo ajustados pelo usuário.
+            if not manual:
+                saldo = calcular_saldo_dia(
+                    data, m1, m2, m3, m4, justificativa
+                )
+                cursor.execute(
+                    """
+                    UPDATE banco_horas
+                    SET m1 = ?, m2 = ?, m3 = ?, m4 = ?, saldo = ?
+                    WHERE data = ?
+                    """,
+                    (m1, m2, m3, m4, saldo, data)
+                )
+
+        conn.commit()
+
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
