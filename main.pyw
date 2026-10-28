@@ -18,6 +18,7 @@ import re
 import settings
 import database
 import scraper
+import chromedriver_update
 import relatorio
 
 # =============================================================================
@@ -166,6 +167,8 @@ class PontoApp:
         self.esquecimento_retorno_data = None
         
         self.setup_ui()
+        self.chromedriver_update_popup = None
+        chromedriver_update.agendar_verificacao(self)
         
         threading.Thread(target=self.monitor_system, daemon=True).start()
         threading.Thread(target=self.update_clock_loop, daemon=True).start()
