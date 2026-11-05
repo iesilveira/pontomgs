@@ -19,6 +19,7 @@ import settings
 import database
 import scraper
 import chromedriver_update
+import diagnostico
 import relatorio
 
 # =============================================================================
@@ -2656,7 +2657,7 @@ class PontoApp:
             pystray.MenuItem(TEXT_TRAY_CONFIG, self.tray_show_config),
             pystray.MenuItem(TEXT_TRAY_LEMBRETES, self.tray_show_lembretes),
             pystray.MenuItem(TEXT_TRAY_BANCO, self.tray_show_banco_horas),
-            pystray.MenuItem(TEXT_TRAY_RELATORIO, self.tray_show_relatorio),
+            pystray.MenuItem("Sobre", self.tray_show_sobre),
             pystray.MenuItem(TEXT_TRAY_SAIR, self.tray_exit_app)
         )
         self.tray_icon = pystray.Icon("PontoApp", self.create_clock_icon(), TEXT_TITLE_APP, menu)
@@ -2687,6 +2688,17 @@ class PontoApp:
     def tray_exit_app(self, icon, item):
         self.tray_icon.stop()
         self.root.after(0, self.root.destroy)
+
+    def show_sobre_window(self):
+        import sobre
+        sobre.mostrar(self)
+
+    def tray_show_sobre(self, icon=None, item=None):
+        self.root.after(0, self.show_sobre_window)
+
+diagnostico.instrumentar_database(database)
+diagnostico.instrumentar_scraper(scraper)
+diagnostico.instrumentar_app(PontoApp)
 
 if __name__ == "__main__":
     app = PontoApp()

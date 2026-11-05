@@ -1,4 +1,4 @@
-import json
+﻿import json
 """
 Autor: Ismael Elói da Silveira Silva
 Descrição: Módulo de automação com Selenium (Raspagem de Dados) e PyAutoGUI (Ação de Registro).
@@ -16,94 +16,11 @@ from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.ui import WebDriverWait, Select, Select, Select, Select
 from selenium.webdriver.support import expected_conditions as EC
 import database
+import diagnostico
 
 def _criar_driver_chrome(options=None, **kwargs):
-    """Cria o ChromeDriver com fallback para Selenium Manager.
-
-    Parâmetros opcionais aceitos:
-        options: ChromeOptions já configuradas.
-        visivel / visible: True para abrir o Chrome visivelmente.
-        headless: True para solicitar execução sem janela.
-        driver_path / executable_path: caminho explícito do chromedriver.
-
-    Se nenhuma opção de visibilidade for informada, mantém as opções
-    recebidas. Assim, opções headless já existentes continuam headless,
-    enquanto a rotina histórica sem --headless permanece visível.
-    """
-    import os
-    from pathlib import Path
-    from selenium import webdriver
-    from selenium.webdriver.chrome.service import Service
-
-    if options is None:
-        options = kwargs.pop("chrome_options", None)
-    if options is None:
-        options = kwargs.pop("opcoes", None)
-    if options is None:
-        options = webdriver.ChromeOptions()
-
-    visivel = kwargs.pop("visivel", kwargs.pop("visible", None))
-    headless = kwargs.pop("headless", None)
-    if visivel is None and headless is not None:
-        visivel = not bool(headless)
-
-    argumentos = list(getattr(options, "arguments", []))
-    if visivel is True:
-        for argumento in argumentos:
-            if argumento.startswith("--headless"):
-                try:
-                    options.arguments.remove(argumento)
-                except (AttributeError, ValueError):
-                    pass
-    elif visivel is False:
-        if not any(arg.startswith("--headless") for arg in argumentos):
-            options.add_argument("--headless=new")
-
-    caminho_explicito = (
-        kwargs.pop("driver_path", None)
-        or kwargs.pop("executable_path", None)
-        or os.environ.get("CHROMEDRIVER_PATH")
-        or os.environ.get("CHROMEDRIVER")
-    )
-
-    caminhos = []
-    if caminho_explicito:
-        caminhos.append(Path(caminho_explicito))
-
-    caminho_local = Path(__file__).resolve().parent / "chromedriver.exe"
-    if caminho_local not in caminhos and caminho_local.exists():
-        caminhos.append(caminho_local)
-
-    erros = []
-    for caminho in caminhos:
-        if not caminho.exists():
-            erros.append(f"Driver não encontrado: {caminho}")
-            continue
-        try:
-            return webdriver.Chrome(
-                service=Service(executable_path=str(caminho)),
-                options=options
-            )
-        except Exception as erro:
-            erros.append(
-                f"Falha usando {caminho}: {type(erro).__name__}: {erro}"
-            )
-
-    # Selenium Manager procura/baixa automaticamente um driver compatível.
-    try:
-        return webdriver.Chrome(options=options)
-    except Exception as erro:
-        erros.append(
-            "Falha usando Selenium Manager: "
-            f"{type(erro).__name__}: {erro}"
-        )
-
-    detalhes = "\n".join(erros) if erros else "Nenhum método de inicialização disponível."
-    raise RuntimeError(
-        "Não foi possível iniciar o ChromeDriver. Verifique se o Chrome está "
-        "instalado e se a versão do Selenium consegue obter um driver compatível.\n"
-        + detalhes
-    )
+    import chrome_gerenciado
+    return chrome_gerenciado.criar_driver(options=options, **kwargs)
 
 def buscar_marcacoes_selenium(matricula, senha):
     options = webdriver.ChromeOptions()
@@ -116,7 +33,7 @@ def buscar_marcacoes_selenium(matricula, senha):
     try:
         chromedriver_path = os.path.join(os.path.dirname(__file__), "chromedriver.exe")
         service = Service(executable_path=chromedriver_path)
-        driver = webdriver.Chrome(service=service, options=options)
+        driver = _criar_driver_chrome(options=options)
             
         driver.set_page_load_timeout(30)
         driver.get("http://areaempregado.mgs.srv.br/login")
@@ -132,6 +49,9 @@ def buscar_marcacoes_selenium(matricula, senha):
             if error_dialog:
                 error_dialog[0].click()
                 time.sleep(1)
+                diagnostico.warning(
+                    "TELINHA: portal exibiu diálogo de erro de login"
+                )
                 return "Erro: Usuário ou senha incorreta."
         except Exception:
             pass
@@ -152,6 +72,14 @@ def buscar_marcacoes_selenium(matricula, senha):
             if table:
                 rows = table.find_all("tr")
         
+        diagnostico.info(
+            "TELINHA: grade recebida",
+            quantidade_linhas=len(rows),
+            url=diagnostico.resumir_url(driver.current_url),
+            titulo=str(driver.title)[:160],
+        )
+        if not rows:
+            diagnostico.warning("TELINHA: grade sem linhas")
         marcacoes_texto = "Sem marcações"
         hoje_str = datetime.datetime.now().strftime("%d/%m/%Y")
         
@@ -180,6 +108,9 @@ def buscar_marcacoes_selenium(matricula, senha):
         return marcacoes_texto
 
     except Exception:
+        diagnostico.registrar_excecao(
+            "TELINHA", "buscar_marcacoes_selenium"
+        )
         return "Erro ao buscar marcações"
     finally:
         if driver:
@@ -196,7 +127,7 @@ def sync_mes_scraper(matricula, senha):
     try:
         chromedriver_path = os.path.join(os.path.dirname(__file__), "chromedriver.exe")
         service = Service(executable_path=chromedriver_path)
-        driver = webdriver.Chrome(service=service, options=options)
+        driver = _criar_driver_chrome(options=options)
             
         driver.set_page_load_timeout(30)
         driver.get("http://areaempregado.mgs.srv.br/login")
@@ -210,6 +141,9 @@ def sync_mes_scraper(matricula, senha):
             WebDriverWait(driver, 15).until(lambda d: d.current_url != login_url or len(d.find_elements(By.XPATH, "//div[@role=\'dialog\']//button[text()=\'OK\']")) > 0)
             error_dialog = driver.find_elements(By.XPATH, "//div[@role=\'dialog\']//button[text()=\'OK\']")
             if error_dialog:
+                diagnostico.warning(
+                    "BANCO_MES_ATUAL: portal exibiu diálogo de erro de login"
+                )
                 return False
         except Exception:
             pass
@@ -230,6 +164,14 @@ def sync_mes_scraper(matricula, senha):
             if table:
                 rows = table.find_all("tr")
         
+        diagnostico.info(
+            "BANCO_MES_ATUAL: grade recebida",
+            quantidade_linhas=len(rows),
+            url=diagnostico.resumir_url(driver.current_url),
+            titulo=str(driver.title)[:160],
+        )
+        if not rows:
+            diagnostico.warning("BANCO_MES_ATUAL: grade sem linhas")
         if rows:
             hoje_str = datetime.datetime.now().strftime("%d/%m/%Y")
             
@@ -300,7 +242,10 @@ def sync_mes_anterior_scraper(matricula, senha, mes_ano, modo_debug=True):
     driver = None
 
     def registrar(etapa):
-        return None
+        diagnostico.info(
+            "BANCO_HISTORICO: etapa",
+            etapa=diagnostico.sanitizar(etapa),
+        )
 
     def garantir_dias_do_mes():
         """Garante todas as datas, inclusive fins de semana, sem apagar registros existentes."""
@@ -604,65 +549,7 @@ def realizar_registro_ponto(matricula, senha):
 # ============================================================================
 # Driver Chrome resiliente - instalado pelo atualizador 2026.10.02-driver-debug
 # ============================================================================
-def criar_driver_chrome(options):
-    """Cria ChromeDriver com alternativas para evitar Selenium Manager falhar."""
-    import glob
-    import shutil as _shutil
-    from selenium import webdriver as _webdriver
-    from selenium.webdriver.chrome.service import Service
-
-    erros = []
-    candidatos = []
-
-    variavel = os.environ.get("CHROMEDRIVER")
-    if variavel:
-        candidatos.append(variavel)
-
-    raiz = os.path.dirname(os.path.abspath(__file__))
-    candidatos.extend([
-        os.path.join(raiz, "chromedriver.exe"),
-        os.path.join(raiz, "chromedriver"),
-        _shutil.which("chromedriver"),
-    ])
-
-    candidatos.extend(glob.glob(os.path.expanduser(
-        "~/.wdm/drivers/chromedriver/**/chromedriver.exe"
-    ), recursive=True))
-
-    vistos = set()
-    for candidato in candidatos:
-        if not candidato or candidato in vistos:
-            continue
-        vistos.add(candidato)
-        if not os.path.isfile(candidato):
-            continue
-        try:
-            return _webdriver.Chrome(
-                service=Service(candidato),
-                options=options
-            )
-        except Exception as erro:
-            erros.append(f"{candidato}: {erro}")
-
-    try:
-        from webdriver_manager.chrome import ChromeDriverManager
-        caminho = ChromeDriverManager().install()
-        return _webdriver.Chrome(
-            service=Service(caminho),
-            options=options
-        )
-    except Exception as erro:
-        erros.append(f"webdriver-manager: {erro}")
-
-    try:
-        return _webdriver.Chrome(options=options)
-    except Exception as erro:
-        erros.append(f"Selenium Manager: {erro}")
-
-    raise RuntimeError(
-        "Não foi possível criar o ChromeDriver. Caminhos e métodos testados:\n- "
-        + "\n- ".join(erros)
-        + "\n\nInstale/atualize o Google Chrome ou coloque chromedriver.exe "
-        "na mesma pasta do scraper.py."
-    )
+def criar_driver_chrome(options=None, **kwargs):
+    import chrome_gerenciado
+    return chrome_gerenciado.criar_driver(options=options, **kwargs)
 

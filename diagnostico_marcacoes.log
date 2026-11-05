@@ -1,0 +1,34 @@
+2026-11-05 17:02:27 | INFO | MainThread | DIAGNOSTICO | inicializado | arquivo='C:\\Users\\x17821234\\Documents\\GitHub\\pontomgs\\diagnostico_marcacoes.log'
+2026-11-05 17:02:27 | INFO | MainThread | TELINHA_UI | início | resultado='str'
+2026-11-05 17:02:27 | INFO | MainThread | TELINHA_UI | resultado | tipo='None'
+2026-11-05 17:02:27 | INFO | MainThread | TELINHA_UI | fim | duracao_segundos=0.0
+2026-11-05 17:02:27 | INFO | Thread-4 (atualizar_marcacoes_loop) | TELINHA_THREAD | início
+2026-11-05 17:02:27 | INFO | Thread-4 (atualizar_marcacoes_loop) | TELINHA | início | data='05/11/2026'
+2026-11-05 17:02:27 | INFO | Thread-4 (atualizar_marcacoes_loop) | DRIVER_HELPER | início
+2026-11-05 17:02:28 | INFO | Thread-4 (atualizar_marcacoes_loop) | CHROME_GERENCIADO | criando sessão | versao='157.0.8103.38'
+2026-11-05 17:02:28 | INFO | Thread-4 (atualizar_marcacoes_loop) | DRIVER | criando sessão Selenium | chromedriver_local_existe=True | python='3.12.0'
+2026-11-05 17:02:28 | INFO | Thread-4 (atualizar_marcacoes_loop) | DRIVER | sessão iniciada | versao_chrome='157.0.8103.38' | versao_driver='157.0.8103.38 (a733b5afbb3ba618844ff8876b89ad1a774b2f18-refs/branch-heads/8103@{#1034})'
+2026-11-05 17:02:28 | INFO | Thread-4 (atualizar_marcacoes_loop) | DRIVER_HELPER | resultado | tipo='WebDriver'
+2026-11-05 17:02:28 | INFO | Thread-4 (atualizar_marcacoes_loop) | DRIVER_HELPER | fim | duracao_segundos=0.672
+2026-11-05 17:02:32 | INFO | Thread-4 (atualizar_marcacoes_loop) | TELINHA: grade recebida | quantidade_linhas=30 | url='https://areaempregado.mgs.srv.br/Empregado/MarcacoesPonto' | titulo='Marcações de Ponto'
+2026-11-05 17:02:37 | INFO | Thread-4 (atualizar_marcacoes_loop) | TELINHA | resultado | tipo='texto' | vazio=False | quantidade_horarios_detectados=1 | tamanho=5
+2026-11-05 17:02:37 | INFO | Thread-4 (atualizar_marcacoes_loop) | TELINHA | fim | duracao_segundos=9.25
+2026-11-05 17:02:37 | INFO | MainThread | TELINHA_UI | início | resultado='str'
+2026-11-05 17:02:37 | INFO | MainThread | TELINHA_UI | resultado | tipo='None'
+2026-11-05 17:02:37 | INFO | MainThread | TELINHA_UI | fim | duracao_segundos=0.0
+2026-11-05 17:02:48 | INFO | MainThread | TELINHA_UI | início | resultado='str'
+2026-11-05 17:02:48 | INFO | Thread-4 (atualizar_marcacoes_loop) | TELINHA | início | data='05/11/2026'
+2026-11-05 17:02:48 | INFO | Thread-4 (atualizar_marcacoes_loop) | DRIVER_HELPER | início
+2026-11-05 17:02:48 | INFO | MainThread | TELINHA_UI | resultado | tipo='None'
+2026-11-05 17:02:48 | INFO | MainThread | TELINHA_UI | fim | duracao_segundos=0.0
+2026-11-05 17:02:48 | INFO | Thread-4 (atualizar_marcacoes_loop) | CHROME_GERENCIADO | criando sessão | versao='157.0.8103.38'
+2026-11-05 17:02:48 | INFO | Thread-4 (atualizar_marcacoes_loop) | DRIVER | criando sessão Selenium | chromedriver_local_existe=True | python='3.12.0'
+2026-11-05 17:02:49 | INFO | Thread-4 (atualizar_marcacoes_loop) | DRIVER | sessão iniciada | versao_chrome='157.0.8103.38' | versao_driver='157.0.8103.38 (a733b5afbb3ba618844ff8876b89ad1a774b2f18-refs/branch-heads/8103@{#1034})'
+2026-11-05 17:02:49 | INFO | Thread-4 (atualizar_marcacoes_loop) | DRIVER_HELPER | resultado | tipo='WebDriver'
+2026-11-05 17:02:49 | INFO | Thread-4 (atualizar_marcacoes_loop) | DRIVER_HELPER | fim | duracao_segundos=0.844
+2026-11-05 17:02:53 | INFO | Thread-4 (atualizar_marcacoes_loop) | TELINHA: grade recebida | quantidade_linhas=30 | url='https://areaempregado.mgs.srv.br/Empregado/MarcacoesPonto' | titulo='Marcações de Ponto'
+2026-11-05 17:02:58 | INFO | Thread-4 (atualizar_marcacoes_loop) | TELINHA | resultado | tipo='texto' | vazio=False | quantidade_horarios_detectados=2 | tamanho=12
+2026-11-05 17:02:58 | INFO | Thread-4 (atualizar_marcacoes_loop) | TELINHA | fim | duracao_segundos=9.469
+2026-11-05 17:02:58 | INFO | MainThread | TELINHA_UI | início | resultado='str'
+2026-11-05 17:02:58 | INFO | MainThread | TELINHA_UI | resultado | tipo='None'
+2026-11-05 17:02:58 | INFO | MainThread | TELINHA_UI | fim | duracao_segundos=0.016
